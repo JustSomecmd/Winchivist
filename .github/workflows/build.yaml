@@ -1,0 +1,106 @@
+# Builds Winchivist: an MSI installer with mpv (libmpv-2.dll) inside, and pictures of each page drawn
+# with sample data. Pushes to main also publish the installer on the Releases page, where the app's
+# update checker finds it.
+
+name: Build
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  screens:
+    name: Render pages
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up JDK
+        uses: actions/setup-java@v6
+        with:
+          java-version: 17
+          distribution: temurin
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+      - name: Render pages with sample data
+        run: ./gradlew :app:renderScreens
+      - name: Upload pictures
+        uses: actions/upload-artifact@v7
+        with:
+          name: screens
+          path: app/build/screens/*.png
+      # Also on a branch of their own, so they can be looked at with git alone
+      - name: Put pictures on the screens branch
+        if: github.event_name == 'push'
+        run: |
+          cd app/build/screens
+          git init -q
+          git checkout -q -b screens
+          git add *.png
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com \
+            commit -q -m "Pages rendered from ${{ github.sha }}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" screens
+
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up JDK
+        uses: actions/setup-java@v6
+        with:
+          java-version: 17
+          distribution: temurin
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # The development build of libmpv, the same library Jellyfin Media Player plays with
+      - name: Download libmpv
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/mpv"
+          gh release download --repo zhongfly/mpv-winbuild --pattern 'mpv-dev-x86_64-2*.7z' --dir "$RUNNER_TEMP/mpv" \
+            || gh release download --repo shinchiro/mpv-winbuild-cmake --pattern 'mpv-dev-x86_64-2*.7z' --dir "$RUNNER_TEMP/mpv"
+          archive=$(ls "$RUNNER_TEMP"/mpv/*.7z | head -n 1)
+          echo "Using $(basename "$archive")"
+          7z e "$archive" -o"app/resources/windows-x64" libmpv-2.dll -r -y
+          ls -l app/resources/windows-x64/libmpv-2.dll
+
+      # Versions go on from 1.0.x, the releases made in the Tubedroid repository before Winchivist
+      # moved here, so their update checkers see these as newer
+      - name: Build the installer
+        shell: bash
+        run: ./gradlew -PdesktopVersion=1.1.${{ github.run_number }} :app:packageMsi
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: Winchivist
+          path: app/build/compose/binaries/main/msi/*.msi
+
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v1.1.${{ github.run_number }}
+          name: Winchivist 1.1.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          body: |
+            Built from ${{ github.sha }}.
+            Run the .msi to install, or to update an older install. It plays videos with mpv; an
+            mpv.conf in %APPDATA%\Winchivist\mpv changes how.
+          files: app/build/compose/binaries/main/msi/*.msi
