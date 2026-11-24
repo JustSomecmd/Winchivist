@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import dev.jdtech.tubedroid.desktop.LocalApp
 import dev.jdtech.tubedroid.desktop.LocalNavigator
+import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiColors
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiPage
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiPurple
@@ -110,7 +111,8 @@ private fun AudioPage(look: AudioLook, content: @Composable () -> Unit) {
 
 /**
  * The audio player along the bottom of the window while something is loaded: its picture and title,
- * which open the full player, then back, play and forward, the place in it, and close.
+ * which open the full player, then back, play and forward, the place in it, the playlist when it
+ * plays from one, and close.
  */
 @Composable
 fun AudioBar(audio: AudioPlayer, modifier: Modifier = Modifier) {
@@ -196,6 +198,16 @@ fun AudioBar(audio: AudioPlayer, modifier: Modifier = Modifier) {
                     AudioTime(timeLeft(session) ?: formatDuration(session.duration))
                 }
                 Spacer(Modifier.width(Spacings.small))
+                if (session.hasPlaylist) {
+                    RoundIconButton(
+                        icon = "ic_list_video",
+                        label = "Show the playlist",
+                        onClick = {
+                            audio.expanded = true
+                            if (!session.playlistOpen) togglePlaylist(session)
+                        },
+                    )
+                }
                 RoundIconButton(
                     icon = "ic_chevron_up",
                     label = "Open the player",
@@ -208,13 +220,15 @@ fun AudioBar(audio: AudioPlayer, modifier: Modifier = Modifier) {
 }
 
 /**
- * The audio player over the whole window: the picture, or the transcript in its place, the title
- * and show, a bar to seek with, and under Play the speed, a sleep timer, the transcript and the
- * video from the same moment. In a wide window the transcript sits beside the rest instead.
+ * The audio player over the whole window: the picture, or the transcript or the playlist in its
+ * place, the title and show, a bar to seek with, and under Play the speed, a sleep timer, the
+ * transcript, the playlist and the video from the same moment. In a wide window the transcript or
+ * the playlist sits beside the rest instead.
  */
 @Composable
 fun AudioScreen(audio: AudioPlayer) {
     val session = audio.session ?: return
+    val navigator = LocalNavigator.current
     val item = session.item
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
@@ -243,7 +257,9 @@ fun AudioScreen(audio: AudioPlayer) {
             ) {
                 AudioTopBar(audio = audio, session = session)
                 val transcriptPost = item?.transcriptPost
-                val lines = session.transcriptOpen && transcriptPost != null
+                // The playlist and the transcript share one place, the playlist first
+                val playlist = session.playlistOpen && session.hasPlaylist
+                val lines = !playlist && session.transcriptOpen && transcriptPost != null
                 val transcript: @Composable (Modifier) -> Unit = { modifier ->
                     if (transcriptPost != null) {
                         TranscriptPanel(
@@ -254,8 +270,26 @@ fun AudioScreen(audio: AudioPlayer) {
                         )
                     }
                 }
+                val videos: @Composable (Modifier) -> Unit = { modifier ->
+                    PlaylistPanel(
+                        name = session.playlistName,
+                        videos = session.playlistVideos,
+                        currentVideoId = item?.id,
+                        loop = session.loop,
+                        onPlay = session::playFromPlaylist,
+                        onLoopChange = session::changeLoop,
+                        onOpenPage = {
+                            audio.playlistId?.let { id ->
+                                audio.expanded = false
+                                navigator.open(Route.Playlist(id))
+                            }
+                        },
+                        onClose = session::togglePlaylist,
+                        modifier = modifier.clip(MaterialTheme.shapes.small),
+                    )
+                }
                 BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    val beside = lines && maxWidth >= BESIDE_FROM
+                    val beside = (lines || playlist) && maxWidth >= BESIDE_FROM
                     Row(
                         horizontalArrangement = Arrangement.Center,
                         modifier =
@@ -267,7 +301,9 @@ fun AudioScreen(audio: AudioPlayer) {
                             horizontalAlignment = Alignment.CenterHorizontally,
                             modifier = Modifier.widthIn(max = PLAYER_WIDTH).fillMaxHeight(),
                         ) {
-                            if (lines && !beside) {
+                            if (playlist && !beside) {
+                                videos(Modifier.weight(1f).fillMaxWidth())
+                            } else if (lines && !beside) {
                                 transcript(Modifier.weight(1f).fillMaxWidth())
                             } else {
                                 // As large as the window leaves room for, and never cut
@@ -290,13 +326,28 @@ fun AudioScreen(audio: AudioPlayer) {
                         }
                         if (beside) {
                             Spacer(Modifier.width(Spacings.large))
-                            transcript(Modifier.weight(1f).fillMaxHeight())
+                            if (playlist) {
+                                videos(Modifier.width(PLAYLIST_PANEL_WIDTH).fillMaxHeight())
+                            } else {
+                                transcript(Modifier.weight(1f).fillMaxHeight())
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+// The playlist and the transcript share one place in the player, so opening one closes the other
+private fun togglePlaylist(session: PlayerSession) {
+    if (!session.playlistOpen && session.transcriptOpen) session.toggleTranscript()
+    session.togglePlaylist()
+}
+
+private fun toggleTranscript(session: PlayerSession) {
+    if (!session.transcriptOpen && session.playlistOpen) session.togglePlaylist()
+    session.toggleTranscript()
 }
 
 /** Back to the page with the bar, and the page of what plays. */
@@ -428,7 +479,15 @@ private fun AudioControls(audio: AudioPlayer, session: PlayerSession, look: Audi
                     icon = "ic_transcript",
                     label = if (session.transcriptOpen) "Close the transcript" else "Transcript",
                     lit = session.transcriptOpen,
-                    onClick = session::toggleTranscript,
+                    onClick = { toggleTranscript(session) },
+                )
+            }
+            if (session.hasPlaylist) {
+                AudioButton(
+                    icon = "ic_list_video",
+                    label = if (session.playlistOpen) "Close the playlist" else "Show the playlist",
+                    lit = session.playlistOpen,
+                    onClick = { togglePlaylist(session) },
                 )
             }
             if (audio.hasVideo) {

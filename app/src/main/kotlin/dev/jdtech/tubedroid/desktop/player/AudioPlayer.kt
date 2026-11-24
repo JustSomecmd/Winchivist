@@ -53,6 +53,10 @@ class AudioPlayer(private val app: AppGraph) {
     /** Whether the full player shows, rather than only the bar. */
     var expanded by mutableStateOf(false)
 
+    /** The TubeArchivist playlist it plays from, if any, for opening that playlist's page. */
+    val playlistId: String?
+        get() = (request as? PlayerRequest.Ta)?.playlistId
+
     val active: Boolean
         get() = session != null
 

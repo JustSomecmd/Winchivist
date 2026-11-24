@@ -228,6 +228,20 @@ fun main(args: Array<String>) {
         graph.audio.session?.toggleTranscript()
         capture("audio-transcript")
         graph.audio.close()
+        // A playlist's sound: the bar with its playlist button, then the player with the list
+        graph.audio.showForPreview(
+            PlayerRequest.Ta(
+                videoId = SampleData.videos[2].youtubeId,
+                playlistId = SampleData.playlists[1].id,
+            ),
+            position = 312.0,
+            duration = 1_284.0,
+        )
+        capture("audio-bar-playlist")
+        graph.audio.expanded = true
+        graph.audio.session?.togglePlaylist()
+        capture("audio-playlist")
+        graph.audio.close()
         // The player, from a playlist, with its controls; without mpv the video's place is empty
         shell.play(
             PlayerRequest.Ta(
@@ -307,6 +321,7 @@ fun main(args: Array<String>) {
                                 onPlay = {},
                                 onLoopChange = {},
                                 onOpenPage = {},
+                                onClose = {},
                             )
                         }
                     }

@@ -1026,6 +1026,7 @@ private fun PlayerWithBars(
                     onPlay = session::playFromPlaylist,
                     onLoopChange = session::changeLoop,
                     onOpenPage = actions.onOpenPlaylistPage,
+                    onClose = session::togglePlaylist,
                 )
             }
             transcript()

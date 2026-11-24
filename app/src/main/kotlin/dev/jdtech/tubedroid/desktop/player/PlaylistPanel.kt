@@ -2,7 +2,6 @@ package dev.jdtech.tubedroid.desktop.player
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,9 +38,10 @@ import dev.jdtech.tubedroid.desktop.ui.VideoThumbnail
 internal val PLAYLIST_PANEL_WIDTH = 380.dp
 
 /**
- * The playlist being played, beside the video as on YouTube. The video playing is marked and the
- * list opens at it; clicking another plays it. At the top right are looping and the playlist's
- * page.
+ * The playlist being played, beside the video as on YouTube, and in the audio player. The video
+ * playing is marked and the list opens at it; clicking another plays it. At the top right are
+ * looping, the playlist's page, and an X that closes the list. Unless [modifier] says otherwise it
+ * is as tall as its place and [PLAYLIST_PANEL_WIDTH] wide.
  */
 @Composable
 internal fun PlaylistPanel(
@@ -52,17 +52,14 @@ internal fun PlaylistPanel(
     onPlay: (videoId: String) -> Unit,
     onLoopChange: (Boolean) -> Unit,
     onOpenPage: () -> Unit,
-    modifier: Modifier = Modifier,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier.fillMaxHeight().width(PLAYLIST_PANEL_WIDTH),
 ) {
     val currentIndex = videos.indexOfFirst { it.youtubeId == currentVideoId }
-    Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        modifier = modifier.fillMaxHeight().width(PLAYLIST_PANEL_WIDTH),
-    ) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, modifier = modifier) {
         Column {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Spacings.small),
                 modifier =
                     Modifier.padding(
                         start = Spacings.medium,
@@ -71,7 +68,7 @@ internal fun PlaylistPanel(
                         bottom = Spacings.small,
                     ),
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(modifier = Modifier.weight(1f).padding(end = Spacings.small)) {
                     Text(
                         text = name,
                         style = MaterialTheme.typography.titleMedium,
@@ -100,6 +97,15 @@ internal fun PlaylistPanel(
                         AppIcon(
                             name = "ic_external_link",
                             contentDescription = "Open the playlist's page",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                Tooltip("Close the playlist") {
+                    IconButton(onClick = onClose) {
+                        AppIcon(
+                            name = "ic_x",
+                            contentDescription = "Close the playlist",
                             modifier = Modifier.size(20.dp),
                         )
                     }
