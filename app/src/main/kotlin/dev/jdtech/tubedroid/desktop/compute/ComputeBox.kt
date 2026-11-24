@@ -12,7 +12,10 @@ import dev.jdtech.tubedroid.desktop.appDataFolder
 import dev.jdtech.tubedroid.desktop.jrwi.jrwiErrorText
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.LocalTime
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -37,8 +40,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-/** An episode the archiver hands out to be heard, as its job says (contract v0.24 to v0.26). */
-class HearJob(
+/** An episode the archiver hands out to be heard, as its job says (contract v0.24 to v0.28). */
+data class HearJob(
     val itemId: Long,
     val title: String,
     val lines: Int,
@@ -51,6 +54,8 @@ class HearJob(
     val found: Double?,
     /** Every model that has heard this sound. */
     val heardWith: List<String>,
+    /** Who is hearing it right now, when someone is: a computer's name, or "server" (v0.28). */
+    val claimedBy: String? = null,
 )
 
 /** An episode with a transcript that the archiver can't hand out, and why. */
@@ -63,8 +68,12 @@ class Heard(
     val ok: Boolean,
     /** The share of the transcript's words that were found. */
     val found: Double?,
-    /** What became of it, in the program's words: in use, or the timing before it kept. */
+    /** What became of it: in use, or the timing before it kept, or why it wasn't heard. */
     val text: String,
+    /** Whether its timing is the one in use now. */
+    val used: Boolean = false,
+    /** Who was hearing it when its turn came, so it was left for later: nothing went wrong. */
+    val hearingIt: String? = null,
 )
 
 /**
@@ -72,10 +81,15 @@ class Heard(
  * part of timing them, and sends back the words heard. The archiver matches them to the transcript
  * itself, so the lines come out as its own timing's would.
  *
- * The hearing is done by the archiver's own PC program, `jrwi_hear.py`, which Winchivist carries a
- * copy of and runs with a Python on this PC that has faster-whisper, one episode at a time. The
- * archiver's address and token reach it through its environment, never on its command line or in a
- * file, and it sends the token to the archiver alone.
+ * The hearing is done by the archiver's own PC program, `jrwi_hear.py`, run with a Python on this
+ * PC that has faster-whisper, one episode at a time. The copy is the archiver's own, fetched from
+ * it with its token whenever its version changes (archiver 0.14.10 and newer), or else the one that
+ * came with Winchivist. The archiver's address and token reach it through its environment, never on
+ * its command line or in a file, and it sends the token to the archiver alone.
+ *
+ * The program says what it's doing as one JSON object a line (program 1.4 and newer), which is what
+ * the page shows. It claims each episode before hearing it, so the archiver's own timing and other
+ * computers leave that one alone; an episode someone else has claimed is left for later.
  *
  * Nothing is heard until Start is pressed, or the PC is idle or the hour is right when Settings
  * says to wait for that.
@@ -91,6 +105,13 @@ class ComputeBox(private val app: AppGraph) {
         OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.MINUTES)
+            .build()
+
+    // For letting go of a claim on the way out, which mustn't hold anything up
+    private val quick =
+        OkHttpClient.Builder()
+            .connectTimeout(2, TimeUnit.SECONDS)
+            .callTimeout(3, TimeUnit.SECONDS)
             .build()
 
     enum class State {
@@ -155,9 +176,21 @@ class ComputeBox(private val app: AppGraph) {
     var pythonShown by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * Which copy of the program runs, once that's been settled: its version and where it's from.
+     */
+    var programShown by mutableStateOf<String?>(null)
+        private set
+
     private var running: Job? = null
     @Volatile private var helper: Process? = null
     @Volatile private var stopping = false
+
+    // The claim the program took on the episode it's hearing. It lets go of it itself, unless it's
+    // stopped by force, when that's left to Winchivist
+    private class Claim(val itemId: Long, val id: String)
+
+    @Volatile private var claim: Claim? = null
     private var python: List<String>? = null
 
     // Not started by itself before this, so a run that found nothing to do, or was stopped by
@@ -166,7 +199,13 @@ class ComputeBox(private val app: AppGraph) {
 
     init {
         // The program hears in processes of its own, which mustn't outlive Winchivist
-        Runtime.getRuntime().addShutdownHook(Thread { stopHelper() })
+        Runtime.getRuntime()
+            .addShutdownHook(
+                Thread {
+                    stopHelper()
+                    letGo()
+                }
+            )
         scope.launch {
             snapshotFlow { settings.hearWhen }
                 .collectLatest { mode ->
@@ -185,7 +224,10 @@ class ComputeBox(private val app: AppGraph) {
     // count a hearing it couldn't match, and that one isn't heard again every round
     private val sent = mutableSetOf<String>()
 
-    /** The episodes still to hear with the model picked, newest first. */
+    /**
+     * The episodes still to hear with the model picked, newest first. Those someone else is hearing
+     * right now are among them, and are left until they're free.
+     */
     fun toHear(): List<HearJob> {
         val model = settings.hearModel
         return jobs.orEmpty().filter { job ->
@@ -270,11 +312,14 @@ class ComputeBox(private val app: AppGraph) {
                 (job["heard_with"] as? JsonArray).orEmpty().mapNotNull {
                     (it as? JsonPrimitive)?.takeIf { name -> name.isString }?.content
                 },
+            claimedBy = (job["claimed"] as? JsonObject)?.let { it.text("by") ?: ANOTHER },
         )
     }
 
     private fun JsonObject.text(key: String): String? =
         (get(key) as? JsonPrimitive)?.takeIf { it !is JsonNull && it.isString }?.content
+
+    private fun JsonObject.number(key: String): Double? = (get(key) as? JsonPrimitive)?.doubleOrNull
 
     /** An answer of the archiver's, asked with its token in a header as everywhere else. */
     private fun get(path: String): JsonObject {
@@ -313,7 +358,8 @@ class ComputeBox(private val app: AppGraph) {
         var again = AUTO_AGAIN_MS
         try {
             if (!list()) return
-            val todo = toHear()
+            // Those someone else is hearing now are left for a later round
+            val todo = toHear().filter { it.claimedBy == null }
             if (todo.isEmpty()) return
             val model = settings.hearModel
             if (withContext(Dispatchers.IO) { findPython() } == null) {
@@ -336,6 +382,8 @@ class ComputeBox(private val app: AppGraph) {
                 current = job
                 step = "Starting"
                 fraction = null
+                // The archiver's own copy of the program, should it have changed meanwhile
+                withContext(Dispatchers.IO) { prepareProgram() }
                 val result = hearOne(job, model)
                 if (stopping) {
                     again = HELD_AFTER_STOP_MS
@@ -343,7 +391,13 @@ class ComputeBox(private val app: AppGraph) {
                 }
                 heard.add(0, result)
                 while (heard.size > HEARD_KEPT) heard.removeAt(heard.lastIndex)
-                if (result.ok) {
+                val hearingIt = result.hearingIt
+                if (hearingIt != null) {
+                    // Someone else got to it first; the list says so until it's read again
+                    jobs = jobs?.map {
+                        if (it.itemId == job.itemId) it.copy(claimedBy = hearingIt) else it
+                    }
+                } else if (result.ok) {
                     failed = 0
                     heardNow++
                     sent += "${job.itemId} $model"
@@ -371,74 +425,202 @@ class ComputeBox(private val app: AppGraph) {
         }
     }
 
-    private fun HearJob.heardBy(model: String, result: Heard): HearJob {
+    private fun HearJob.heardBy(model: String, result: Heard): HearJob =
         // The archiver keeps the new timing only when it found at least as many words
-        val used = result.text.startsWith(IN_USE)
-        return HearJob(
-            itemId = itemId,
-            title = title,
-            lines = lines,
-            seconds = seconds,
+        copy(
             timed = true,
-            timedWith = if (used) model else timedWith,
-            found = if (used) result.found ?: found else found,
+            timedWith = if (result.used) model else timedWith,
+            found = if (result.used) result.found ?: found else found,
             heardWith = heardWith + model,
         )
-    }
 
-    /** Hears one episode with the program, following what it says. */
+    /** Hears one episode with the program, following the events it prints. */
     private suspend fun hearOne(job: HearJob, model: String): Heard {
         val last = ArrayDeque<String>()
         var found: Double? = null
         var outcome: String? = null
-        val figures = Regex("^" + Regex.escape(model) + """\s+(\d+(?:\.\d+)?)%""")
+        var used = false
+        var claimedBy: String? = null
+        var failure: String? = null
+        fun say(text: String) {
+            last.addLast(text)
+            while (last.size > LINES_KEPT) last.removeFirst()
+            show(text)
+        }
+        val arguments =
+            listOf("compare", job.itemId.toString(), "--models", model) +
+                listOf("--device", settings.hearDevice)
         val code =
             try {
-                program(
-                    listOf(
-                        "compare",
-                        job.itemId.toString(),
-                        "--models",
-                        model,
-                        "--device",
-                        settings.hearDevice,
-                    ),
-                    onLine = { line ->
-                        last.addLast(line)
-                        while (last.size > LINES_KEPT) last.removeFirst()
-                        figures.find(line)?.let {
-                            found = it.groupValues[1].toDoubleOrNull()?.div(100)
+                program(arguments) { event, line ->
+                    if (event == null) {
+                        // Not an event: something Python or one of its libraries wrote
+                        say(line)
+                    } else {
+                        when (event.text("event")) {
+                            "message" -> {
+                                event.text("text")?.let(::say)
+                            }
+                            "claim" -> {
+                                event.text("claim")?.let { claim = Claim(job.itemId, it) }
+                            }
+                            "claimed" -> {
+                                claimedBy = event.text("by") ?: ANOTHER
+                            }
+                            "copying" ->
+                                show(
+                                    "The archiver is copying the sound out of TubeArchivist's copy"
+                                )
+                            "download" -> {
+                                val done = event.number("done")
+                                val total = event.number("total")?.takeIf { it > 0 }
+                                if (done != null && total != null) {
+                                    show(
+                                        "Downloading the sound: ${megabytes(done)} of " +
+                                            "${megabytes(total)} MB",
+                                        (done / total).toFloat(),
+                                    )
+                                } else {
+                                    show("Downloading the sound")
+                                }
+                            }
+                            "downloaded" -> show("The sound is here")
+                            "loading" -> show("Loading ${event.text("model") ?: model}")
+                            "hearing" -> {
+                                val done = event.number("done")
+                                val total = event.number("total")?.takeIf { it > 0 }
+                                val times =
+                                    listOfNotNull(
+                                        event.number("spent")?.let { "${clock(it)} so far" },
+                                        event.number("left")?.let { "about ${clock(it)} left" },
+                                    )
+                                if (done != null && total != null) {
+                                    val pieces = "${done.toInt()} of ${total.toInt()} pieces heard"
+                                    show(
+                                        "${event.text("model") ?: model}: " +
+                                            (listOf(pieces) + times).joinToString(", "),
+                                        (done / total).toFloat(),
+                                    )
+                                }
+                            }
+                            "heard" ->
+                                show(
+                                    "Heard" +
+                                        event.number("took")?.let { " in ${clock(it)}" }.orEmpty()
+                                )
+                            "sending" ->
+                                show(
+                                    "Sending what was heard; the archiver matches it to the transcript"
+                                )
+                            "sent" -> {
+                                val mine =
+                                    (event["tries"] as? JsonArray)
+                                        .orEmpty()
+                                        .mapNotNull { it as? JsonObject }
+                                        .firstOrNull { it.text("model") == model }
+                                found = mine?.number("found")
+                                val replaced =
+                                    (event["replaced"] as? JsonPrimitive)?.booleanOrNull != false
+                                used = replaced && event.text("used") == model
+                                outcome =
+                                    sentText(model, mine, used, event["before"] as? JsonObject)
+                            }
+                            "skipped" -> {
+                                failure = event.text("why")
+                            }
+                            "error" -> {
+                                failure = event.text("message")
+                            }
+                            // Programs ignore the events they don't know
+                            else -> {}
                         }
-                        if (line.startsWith(IN_USE) || line.startsWith(KEPT)) outcome = line
-                        show(line)
-                    },
-                    onPart = ::show,
-                )
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                last.addLast(e.message ?: e.toString())
+                failure = e.message ?: e.toString()
                 -1
             }
-        val ok = code == 0
-        return Heard(
-            itemId = job.itemId,
-            title = job.title,
-            ok = ok,
-            found = found,
-            text =
-                if (ok) outcome ?: "Heard and sent."
-                else last.takeLast(ERROR_LINES).joinToString("\n").ifBlank { "It stopped." },
-        )
+        // Stopped by force, it couldn't let go of its claim itself; otherwise this finds none
+        if (code != 0) withContext(Dispatchers.IO) { letGo() }
+        claim = null
+        val by = claimedBy
+        val wrong = failure
+        return when {
+            by != null || code == CLAIMED_ELSEWHERE ->
+                Heard(
+                    itemId = job.itemId,
+                    title = job.title,
+                    ok = false,
+                    found = null,
+                    text = "Left for later: ${whoHears(by ?: ANOTHER)}.",
+                    hearingIt = by ?: ANOTHER,
+                )
+            code == 0 && wrong == null ->
+                Heard(job.itemId, job.title, true, found, outcome ?: "Heard and sent.", used)
+            else ->
+                Heard(
+                    itemId = job.itemId,
+                    title = job.title,
+                    ok = false,
+                    found = found,
+                    text =
+                        wrong
+                            ?: last.takeLast(ERROR_LINES).joinToString("\n").ifBlank {
+                                "It stopped."
+                            },
+                )
+        }
     }
 
-    // What the program says is shown as it says it, with a bar for the two steps that count
-    private fun show(line: String) {
-        step = line
-        val count = DOWNLOADING.find(line) ?: PIECES.find(line)
-        val done = count?.groupValues?.get(1)?.toFloatOrNull()
-        val total = count?.groupValues?.get(2)?.toFloatOrNull()
-        fraction = if (done != null && total != null && total > 0) done / total else null
+    /** What the archiver made of the words sent, from its answer. */
+    private fun sentText(model: String, mine: JsonObject?, used: Boolean, before: JsonObject?) =
+        buildString {
+            val found = mine?.number("found")?.let { " ${percent(it)} of words found" }
+            val was =
+                before?.text("model")?.let { old ->
+                    val where = if (before?.text("source") == "pc") "a PC" else "the server"
+                    "$old from $where" +
+                        before?.number("found")?.let { " (${percent(it)})" }.orEmpty()
+                }
+            if (used) {
+                append("In use now: $model")
+                found?.let { append(",$it") }
+                was?.let { append(", in place of $it") }
+                append(".")
+            } else {
+                append("Kept the timing in use")
+                was?.let { append(": $it") }
+                append(".")
+                mine?.text("error")?.let { append(" $model: $it.") }
+                    ?: found?.let { append(" $model:$it.") }
+            }
+        }
+
+    /** Who is hearing an episode, in words. */
+    fun whoHears(by: String): String =
+        if (by == "server") "the archiver is hearing it itself" else "$by is hearing it"
+
+    private fun percent(share: Double): String = String.format(Locale.ROOT, "%.1f%%", share * 100)
+
+    private fun megabytes(bytes: Double): Long = (bytes / 1_000_000).toLong()
+
+    /** Seconds as 1:03, or 1:02:03 from an hour on. */
+    private fun clock(seconds: Double): String {
+        val whole = seconds.toLong().coerceAtLeast(0)
+        val rest = String.format(Locale.ROOT, "%02d", whole % 60)
+        return if (whole >= 3600) {
+            "${whole / 3600}:" + String.format(Locale.ROOT, "%02d", whole / 60 % 60) + ":$rest"
+        } else {
+            "${whole / 60}:$rest"
+        }
+    }
+
+    // What the program is doing, with a bar for the steps that count
+    private fun show(text: String, share: Float? = null) {
+        step = text
+        fraction = share
     }
 
     /** Stops once the episode being heard has been sent, or carries on after all. */
@@ -451,6 +633,33 @@ class ComputeBox(private val app: AppGraph) {
         if (state != State.HEARING) return
         stopping = true
         stopHelper()
+        // The program can't let go of its claim now, so the episode would stay taken for half an
+        // hour: hearOne does it as soon as the program is gone
+    }
+
+    /**
+     * Lets go of the claim the program took on the episode it was hearing, for when the program was
+     * stopped by force and couldn't. Without it the claim runs out by itself in half an hour.
+     */
+    private fun letGo() {
+        val held = claim ?: return
+        claim = null
+        runCatching {
+            val api = app.jrwi.api
+            val url =
+                api.fileUrl("/api/transcripts/jobs/${held.itemId}/claim")
+                    ?.toHttpUrlOrNull()
+                    ?.newBuilder()
+                    ?.addQueryParameter("claim", held.id)
+                    ?.build() ?: return
+            val request =
+                Request.Builder()
+                    .url(url)
+                    .delete()
+                    .apply { api.authHeader?.let { header("Authorization", it) } }
+                    .build()
+            quick.newCall(request).execute().close()
+        }
     }
 
     /** Runs the program's own check: the archiver, Python, faster-whisper and the graphics card. */
@@ -466,16 +675,28 @@ class ComputeBox(private val app: AppGraph) {
                     checkText = NO_PYTHON
                     return@launch
                 }
+                withContext(Dispatchers.IO) { prepareProgram() }
                 val device = settings.hearDevice
                 program(
                     listOf("check") +
-                        if (device == "cpu") listOf("--device", "cpu") else emptyList(),
-                    onLine = { line ->
-                        said.appendLine(line)
+                        if (device == "cpu") listOf("--device", "cpu") else emptyList()
+                ) { event, line ->
+                    // In the program's own words, a finding a line
+                    val text =
+                        if (event == null) {
+                            line
+                        } else {
+                            when (event.text("event")) {
+                                "message" -> event.text("text")
+                                "error" -> event.text("message")
+                                else -> null
+                            }
+                        }
+                    if (text != null) {
+                        said.appendLine(text)
                         checkText = said.toString().trim()
-                    },
-                    onPart = {},
-                )
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -489,7 +710,7 @@ class ComputeBox(private val app: AppGraph) {
     }
 
     /** The folder the program keeps its speech models and the sound it's hearing in. */
-    fun folder(): File = script().parentFile
+    fun folder(): File = script().parentFile.also { it.mkdirs() }
 
     /** Forgets the Python found, for when another one was picked. */
     fun pythonChanged() {
@@ -501,45 +722,143 @@ class ComputeBox(private val app: AppGraph) {
     fun close() {
         stopping = true
         stopHelper()
+        letGo()
         scope.cancel()
     }
 
     // The program
 
-    /** The program: the copy picked in Settings, or Winchivist's own, written out when it's new. */
-    private fun script(): File {
-        settings.hearProgram
-            ?.takeIf { it.isNotBlank() }
-            ?.let(::File)
-            ?.takeIf { it.isFile }
-            ?.let {
-                return it
-            }
-        val file = File(appDataFolder(), "hear/$PROGRAM")
-        val own = javaClass.getResourceAsStream("/hear/$PROGRAM")?.use { it.readBytes() }
-        if (own != null && !(file.isFile && file.readBytes().contentEquals(own))) {
-            file.parentFile?.mkdirs()
-            file.writeBytes(own)
+    /** The copy picked on the page, when there is one and it's there. */
+    private fun pickedProgram(): File? =
+        settings.hearProgram?.takeIf { it.isNotBlank() }?.let(::File)?.takeIf { it.isFile }
+
+    /** Where Winchivist keeps the program when none was picked. */
+    private fun ownProgram(): File = File(appDataFolder(), "hear/$PROGRAM")
+
+    private fun script(): File = pickedProgram() ?: ownProgram()
+
+    /** The program's version, as the file itself says it. */
+    private fun versionOf(text: String): String? = PROGRAM_VERSION.find(text)?.groupValues?.get(1)
+
+    /** Whether version [a] is older than [b], number by number. */
+    private fun older(a: String, b: String): Boolean {
+        val one = a.split('.').map { it.toIntOrNull() ?: 0 }
+        val other = b.split('.').map { it.toIntOrNull() ?: 0 }
+        for (index in 0 until maxOf(one.size, other.size)) {
+            val left = one.getOrElse(index) { 0 }
+            val right = other.getOrElse(index) { 0 }
+            if (left != right) return left < right
         }
-        return file
+        return false
     }
 
     /**
-     * Runs the program with [arguments] and follows what it says: [onLine] for each line it
-     * finishes, [onPart] for one it's still writing, as its progress is. Returns its exit code.
+     * Makes sure Winchivist's copy of the program is the one to run. An archiver that hands its
+     * program out (0.14.10 and newer) is heard for with its own copy, fetched with its token when
+     * the version it names isn't the one here, so the two always fit. For an older archiver it's
+     * the copy that came with Winchivist. A copy picked on the page is left as it is.
+     */
+    private fun prepareProgram() {
+        if (pickedProgram() != null) {
+            programShown = null
+            return
+        }
+        val file = ownProgram()
+        val bundled = javaClass.getResourceAsStream("/hear/$PROGRAM")?.use { it.readBytes() }
+        val here = file.takeIf { it.isFile }?.readText()?.let(::versionOf)
+        val ping = runCatching { get("/api/ping") }.getOrNull()
+        val features =
+            (ping?.get("features") as? JsonArray).orEmpty().mapNotNull {
+                (it as? JsonPrimitive)?.content
+            }
+        val offered = ping?.text("pc_program")?.takeIf { PROGRAM_FEATURE in features }
+        var fromArchiver = offered != null && offered == here
+        if (offered != null && offered != here) {
+            fromArchiver =
+                try {
+                    fetchProgram(file, offered)
+                    true
+                } catch (e: Exception) {
+                    System.err.println("Couldn't fetch the archiver's program: $e")
+                    false
+                }
+        } else if (ping != null && offered == null && bundled != null) {
+            if (!(file.isFile && file.readBytes().contentEquals(bundled))) save(file, bundled)
+        }
+        // With neither, such as before the archiver was ever reached
+        if (!file.isFile && bundled != null) save(file, bundled)
+        val version = file.takeIf { it.isFile }?.readText()?.let(::versionOf)
+        programShown =
+            listOfNotNull(
+                    version?.let { "Version $it" },
+                    if (fromArchiver) "the archiver's own copy"
+                    else "the copy that came with Winchivist",
+                )
+                .joinToString(", ")
+    }
+
+    /** Fetches the archiver's copy of the program, keeping it only when it's what was named. */
+    private fun fetchProgram(file: File, version: String) {
+        val api = app.jrwi.api
+        val url =
+            api.fileUrl(PROGRAM_PATH)?.toHttpUrlOrNull()
+                ?: throw IOException("The JRWI archiver is not set up")
+        val request =
+            Request.Builder()
+                .url(url)
+                .apply { api.authHeader?.let { header("Authorization", it) } }
+                .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw JrwiApiException(response.code, "The archiver answered ${response.code}")
+            }
+            if (response.body.contentLength() > MAX_PROGRAM_BYTES) {
+                throw IOException("What the archiver sent is too big to be its program")
+            }
+            val bytes = response.body.bytes()
+            if (
+                bytes.size > MAX_PROGRAM_BYTES ||
+                    versionOf(bytes.toString(Charsets.UTF_8)) != version
+            ) {
+                throw IOException("What the archiver sent isn't its program $version")
+            }
+            save(file, bytes)
+        }
+    }
+
+    // Whole or not at all, so a copy half written is never run
+    private fun save(file: File, bytes: ByteArray) {
+        file.parentFile?.mkdirs()
+        val fresh = File(file.parentFile, file.name + ".new")
+        fresh.writeBytes(bytes)
+        Files.move(fresh.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+
+    /**
+     * Runs the program with [arguments] and follows what it prints: [onEvent] gets each line, as
+     * the event it is when it's one (see "The program's output" in the archiver's API contract),
+     * and as it was written either way. Returns the program's exit code.
      */
     private suspend fun program(
         arguments: List<String>,
-        onLine: (String) -> Unit,
-        onPart: (String) -> Unit,
+        onEvent: (event: JsonObject?, line: String) -> Unit,
     ): Int =
         withContext(Dispatchers.IO) {
             val python = findPython() ?: throw IOException(NO_PYTHON)
             val api = app.jrwi.api
             val script = script()
             if (!script.isFile) throw IOException("The program isn't there: ${script.path}")
+            // Events came with program 1.4; an older copy can only have been picked by hand
+            val version = versionOf(script.readText())
+            if (version == null || older(version, FIRST_WITH_EVENTS)) {
+                throw IOException(
+                    "This copy of the program is ${version?.let { "version $it" } ?: "too old"}. " +
+                        "Winchivist needs version $FIRST_WITH_EVENTS or newer: pick a newer " +
+                        "copy, or go back to the one found by itself."
+                )
+            }
             val builder =
-                ProcessBuilder(python + script.path + arguments)
+                ProcessBuilder(python + script.path + arguments + "--json")
                     .directory(script.parentFile)
                     .redirectErrorStream(true)
             builder.environment().apply {
@@ -557,20 +876,28 @@ class ComputeBox(private val app: AppGraph) {
                 process.outputStream.close()
                 process.inputStream.reader(Charsets.UTF_8).use { reader ->
                     val line = StringBuilder()
+                    fun finished() {
+                        val text = line.toString().trim()
+                        line.setLength(0)
+                        if (text.isEmpty()) return
+                        val event =
+                            if (text.startsWith("{")) {
+                                runCatching { api.json.parseToJsonElement(text) as? JsonObject }
+                                    .getOrNull()
+                                    ?.takeIf { it["event"] is JsonPrimitive }
+                            } else {
+                                null
+                            }
+                        onEvent(event, text)
+                    }
                     while (true) {
                         val read = reader.read()
                         if (read < 0) break
                         val char = read.toChar()
-                        if (char == '\r' || char == '\n') {
-                            if (line.isNotBlank()) onLine(line.toString().trim())
-                            line.setLength(0)
-                        } else {
-                            line.append(char)
-                            // Progress is written over itself without ending its line
-                            if (!reader.ready() && line.isNotBlank()) onPart(line.toString().trim())
-                        }
+                        // A library's progress, such as a model's download, is written over itself
+                        if (char == '\r' || char == '\n') finished() else line.append(char)
                     }
-                    if (line.isNotBlank()) onLine(line.toString().trim())
+                    finished()
                 }
                 process.waitFor()
             } finally {
@@ -683,7 +1010,17 @@ class ComputeBox(private val app: AppGraph) {
                     null,
                     none,
                 ),
-                HearJob(288, "Blue Jay | Riptide #133", 3120, 9_960.0, false, null, null, none),
+                HearJob(
+                    288,
+                    "Blue Jay | Riptide #133",
+                    3120,
+                    9_960.0,
+                    false,
+                    null,
+                    null,
+                    none,
+                    claimedBy = "server",
+                ),
             )
         jobs =
             waiting +
@@ -722,15 +1059,17 @@ class ComputeBox(private val app: AppGraph) {
                 text =
                     "In use now: large-v3-turbo, 91.2% of words found, in place of small.en from " +
                         "the server (78.8%).",
+                used = true,
             )
         checkText =
-            "Archiver: http://box:8090, version 0.14.9.\n" +
+            "Archiver: http://box:8090, version 0.14.10.\n" +
                 "Episodes: 181 with a transcript. 180 can be heard (336 hours of sound), 3 of " +
                 "them not timed yet.\n" +
                 "Processor: 24 cores, 32 threads.\n" +
                 "faster-whisper: 1.2.1, with CTranslate2 4.6.0.\n" +
                 "The graphics card works: hearing will use it."
         pythonShown = "C:\\Users\\you\\AppData\\Local\\Python\\pythoncore-3.13-64\\python.exe"
+        programShown = "Version 1.4, the archiver's own copy"
     }
 
     companion object {
@@ -747,15 +1086,20 @@ class ComputeBox(private val app: AppGraph) {
         private const val LINES_KEPT = 12
         private const val ERROR_LINES = 6
         private const val HAS_WHISPER = "import ctranslate2, faster_whisper"
-        private const val IN_USE = "In use now:"
-        private const val KEPT = "Kept the timing in use:"
+        private const val PROGRAM_FEATURE = "transcript_program"
+        private const val PROGRAM_PATH = "/api/transcripts/program"
+        private const val MAX_PROGRAM_BYTES = 2_000_000L
+        private const val FIRST_WITH_EVENTS = "1.4"
+
+        // The program's exit code when someone else is hearing every episode it was given
+        private const val CLAIMED_ELSEWHERE = 3
+        private const val ANOTHER = "another computer"
         private const val NO_PYTHON =
             "No Python was found on this PC. The program needs Python 3.13 with faster-whisper: " +
                 "install Python from python.org, then run\n" +
                 "py -3.13 -m pip install faster-whisper psutil\n" +
                 "or pick a Python below."
-        private val DOWNLOADING = Regex("""Downloading the sound: (\d+) of (\d+) MB""")
-        private val PIECES = Regex("""(\d+) of (\d+) pieces heard""")
+        private val PROGRAM_VERSION = Regex("""(?m)^PROGRAM\s*=\s*"([^"]+)"""")
         private val VERSION = Regex("""3\.?(\d+)""")
     }
 }

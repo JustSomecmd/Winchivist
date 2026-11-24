@@ -493,7 +493,10 @@ private fun ComputePcCard(box: ComputeBox, settings: AppSettings) {
         PcLine(
             name = "Program",
             value =
-                settings.hearProgram ?: "Winchivist's copy of the archiver's ${ComputeBox.PROGRAM}",
+                settings.hearProgram
+                    ?: box.programShown
+                    ?: "The archiver's own ${ComputeBox.PROGRAM} when it hands one out, or else " +
+                        "the copy that came with Winchivist",
             pick = "Use another copy",
             onPick = {
                 chooseFile("Pick ${ComputeBox.PROGRAM}", "py")?.let { settings.hearProgram = it }
@@ -588,9 +591,13 @@ private fun ComputeHeardCard(heard: List<Heard>, onItemClick: (Long) -> Unit) {
                 Text(
                     text = result.text,
                     style = MaterialTheme.typography.bodySmall,
+                    // Left for later because someone else is hearing it isn't something gone wrong
                     color =
-                        if (result.ok) MaterialTheme.colorScheme.onSurfaceVariant
-                        else MaterialTheme.colorScheme.error,
+                        if (result.ok || result.hearingIt != null) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
                     maxLines = if (result.ok) 3 else 8,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -625,11 +632,12 @@ private fun ComputeWaitingCard(box: ComputeBox, onItemClick: (Long) -> Unit) {
                 )
                 Text(
                     text =
-                        listOfNotNull(
-                                job.seconds?.let(::formatDuration),
-                                job.timedWith ?: "not timed",
-                            )
-                            .joinToString(" · "),
+                        job.claimedBy?.let(box::whoHears)
+                            ?: listOfNotNull(
+                                    job.seconds?.let(::formatDuration),
+                                    job.timedWith ?: "not timed",
+                                )
+                                .joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -642,11 +650,7 @@ private fun ComputeWaitingCard(box: ComputeBox, onItemClick: (Long) -> Unit) {
             HorizontalDivider(modifier = Modifier.padding(vertical = Spacings.small))
             Text(
                 text =
-                    plural(
-                        box.leftOut.size,
-                        "1 episode can't be heard",
-                        "${box.leftOut.size} episodes can't be heard",
-                    ),
+                    plural(box.leftOut.size, "episode can't be heard", "episodes can't be heard"),
                 style = MaterialTheme.typography.titleSmall,
                 color = JrwiColors.Text,
             )
