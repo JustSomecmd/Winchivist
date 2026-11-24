@@ -1,8 +1,8 @@
 package dev.jdtech.tubedroid.desktop.jrwi
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,10 +17,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -36,7 +34,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -398,16 +397,35 @@ private fun Choice(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacings.small)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(Spacings.small),
+            verticalArrangement = Arrangement.spacedBy(Spacings.small),
+            modifier = Modifier.padding(top = 6.dp),
+        ) {
             options.forEach { (value, label) ->
-                FilterChip(
-                    selected = selected == value,
-                    onClick = { onSelect(value) },
-                    label = { Text(label) },
-                )
+                OptionPill(label = label, selected = selected == value) { onSelect(value) }
             }
         }
     }
+}
+
+/** One of a setting's options, square-cornered as the archive's pills, filled when it's picked. */
+@Composable
+private fun OptionPill(label: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelLarge,
+        color = if (selected) MaterialTheme.colorScheme.onPrimary else JrwiColors.PillText,
+        modifier =
+            Modifier.clip(JrwiPillShape)
+                .then(
+                    if (selected) Modifier.background(MaterialTheme.colorScheme.primary)
+                    else Modifier.border(1.dp, JrwiColors.Line, JrwiPillShape)
+                )
+                .clickable(onClick = onClick)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .padding(horizontal = 14.dp, vertical = 7.dp),
+    )
 }
 
 @Composable
@@ -448,16 +466,15 @@ private fun ComputePcCard(box: ComputeBox, settings: AppSettings) {
                 )
             }
             said != null ->
+                // In the program's own words, a finding a line
                 Text(
                     text = said,
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
                     color = JrwiColors.BodyText,
                     modifier =
                         Modifier.fillMaxWidth()
                             .clip(JrwiShape)
                             .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                            .horizontalScroll(rememberScrollState())
                             .padding(Spacings.small),
                 )
             else ->
@@ -529,12 +546,13 @@ private fun PcLine(
                 style = MaterialTheme.typography.titleSmall,
                 color = JrwiColors.Text,
             )
+            // A long path keeps both its ends
             Text(
                 text = value,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                maxLines = 1,
+                overflow = TextOverflow.MiddleEllipsis,
             )
         }
         if (onReset != null) TextButton(onClick = onReset) { Text("Find by itself") }

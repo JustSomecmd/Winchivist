@@ -183,11 +183,17 @@ class ComputeBox(private val app: AppGraph) {
         }
     }
 
+    // What was heard and sent since Winchivist started, as "item model". The archiver doesn't
+    // count a hearing it couldn't match, and that one isn't heard again every round
+    private val sent = mutableSetOf<String>()
+
     /** The episodes still to hear with the model picked, newest first. */
     fun toHear(): List<HearJob> {
         val model = settings.hearModel
         return jobs.orEmpty().filter { job ->
-            model !in job.heardWith && (settings.hearEvery || !job.timed)
+            model !in job.heardWith &&
+                "${job.itemId} $model" !in sent &&
+                (settings.hearEvery || !job.timed)
         }
     }
 
@@ -341,6 +347,7 @@ class ComputeBox(private val app: AppGraph) {
                 if (result.ok) {
                     failed = 0
                     heardNow++
+                    sent += "${job.itemId} $model"
                     jobs = jobs?.map {
                         if (it.itemId == job.itemId) it.heardBy(model, result) else it
                     }
