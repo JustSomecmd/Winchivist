@@ -1,5 +1,6 @@
 package dev.jdtech.tubedroid.desktop.jrwi
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -8,17 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridState
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -56,7 +52,7 @@ import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.rememberPageModel
 import dev.jdtech.tubedroid.desktop.screens.RefreshButton
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
-import dev.jdtech.tubedroid.desktop.ui.GridScrollbar
+import dev.jdtech.tubedroid.desktop.ui.BlockPage
 import dev.jdtech.tubedroid.desktop.ui.RoundIconButton
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import java.time.Duration
@@ -106,7 +102,7 @@ class JrwiArchiverModel(private val repository: JrwiRepository, private val scop
     var problems by mutableStateOf<List<JrwiProblem>>(emptyList())
         private set
 
-    val gridState = LazyGridState()
+    val scroll = ScrollState(0)
 
     // The check the details were last read after
     private var detailsFor: String? = null
@@ -264,33 +260,24 @@ fun JrwiArchiverScreen() {
                             .padding(top = Spacings.medium),
                 )
             }
-            Box(modifier = Modifier.fillMaxSize()) {
-                LazyVerticalGrid(
-                    state = model.gridState,
-                    columns = GridCells.Adaptive(minSize = CARD_MIN_WIDTH),
-                    contentPadding = PaddingValues(Spacings.default),
-                    horizontalArrangement = Arrangement.spacedBy(Spacings.medium),
-                    verticalArrangement = Arrangement.spacedBy(Spacings.medium),
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    item(key = "status", span = { GridItemSpan(maxLineSpan) }) {
-                        JrwiStatusCard(status, model.lastRun)
-                    }
-                    item(key = "actions", span = { GridItemSpan(maxLineSpan) }) {
-                        JrwiArchiverActions(model = model, status = status)
-                    }
-                    item(key = "events") { JrwiEventsCard(model.events, open) }
-                    item(key = "podcast") {
-                        JrwiPodcastCard(
-                            supported = model.has(JrwiFeature.PODCAST),
-                            podcast = model.podcast,
-                            onItemClick = open,
-                            onRead = { model.readPodcast(navigator::message) },
-                        )
-                    }
-                    item(key = "problems") { JrwiProblemsCard(model.problems, open) }
+            BlockPage(
+                scroll = model.scroll,
+                minColumnWidth = CARD_MIN_WIDTH,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                FullLine(id = "status") { JrwiStatusCard(status, model.lastRun) }
+                FullLine(id = "actions") { JrwiArchiverActions(model = model, status = status) }
+                // These lists come and go by the day, so their rough heights are fixed ones
+                Block(id = "events", about = 480.dp) { JrwiEventsCard(model.events, open) }
+                Block(id = "podcast", about = 420.dp) {
+                    JrwiPodcastCard(
+                        supported = model.has(JrwiFeature.PODCAST),
+                        podcast = model.podcast,
+                        onItemClick = open,
+                        onRead = { model.readPodcast(navigator::message) },
+                    )
                 }
-                GridScrollbar(model.gridState)
+                Block(id = "problems", about = 300.dp) { JrwiProblemsCard(model.problems, open) }
             }
         }
     }

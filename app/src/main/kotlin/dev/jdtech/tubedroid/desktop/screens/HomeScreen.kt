@@ -38,6 +38,7 @@ import dev.jdtech.tubedroid.desktop.LocalNavigator
 import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.Section
 import dev.jdtech.tubedroid.desktop.WatchHistory
+import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinClient
 import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 import dev.jdtech.tubedroid.desktop.rememberPageModel
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
@@ -62,6 +63,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * What Home shows: channels for the carousel, videos and playlists to carry on with, and the latest
@@ -70,6 +72,7 @@ import kotlinx.coroutines.launch
 class HomeModel(
     private val api: TaApi,
     private val history: WatchHistory,
+    private val jellyfin: JellyfinClient,
     private val scope: CoroutineScope,
 ) {
     var featured by mutableStateOf<List<TaChannel>>(emptyList())
@@ -211,11 +214,18 @@ class HomeModel(
                 val videos = api.getVideos(watch = "continue").data
                 // Playlists watched on the phone count too
                 history.sync()
-                // A playlist takes the place of its video. Each item is ranked by when it was last
-                // played here, with videos played elsewhere after, in TubeArchivist's order
+                // What was played last comes first, on whichever device that was: by Jellyfin's
+                // dates, which the phone app goes by too, and by what this computer played itself.
+                // Videos neither knows of come after, in TubeArchivist's order
+                val elsewhere = playedElsewhere()
+                fun playedAt(videoId: String): Long =
+                    maxOf(history.lastPlayed(videoId) ?: 0L, elsewhere[videoId] ?: 0L)
+                // A playlist takes the place of its video
                 val playlists =
                     history.playlists.take(MAX_PLAYLISTS).mapNotNull { session ->
-                        resolvePlaylist(session)?.let { it to session.updatedAt }
+                        resolvePlaylist(session)?.let {
+                            it to maxOf(session.updatedAt, playedAt(session.videoId))
+                        }
                     }
                 val inPlaylists = playlists.flatMap { (item, _) ->
                     listOf(item.video.youtubeId, item.lastVideoId)
@@ -224,12 +234,28 @@ class HomeModel(
                     videos
                         .reversed()
                         .filter { it.youtubeId !in inPlaylists }
-                        .map { ContinueItem.Video(it) to (history.lastPlayed(it.youtubeId) ?: 0L) }
+                        .map { ContinueItem.Video(it) to playedAt(it.youtubeId) }
                 continueWatching =
                     (playlists + single).sortedByDescending { (_, time) -> time }.map { it.first }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {}
+        }
+    }
+
+    /**
+     * When TubeArchivist's videos were last played on any device, as far as Jellyfin knows: the
+     * phone app plays them through Jellyfin, and this app tells Jellyfin when it plays one. Empty
+     * when not signed in to Jellyfin, or when it doesn't answer in time.
+     */
+    private suspend fun playedElsewhere(): Map<String, Long> {
+        if (!jellyfin.isSignedIn) return emptyMap()
+        return try {
+            withTimeoutOrNull(JELLYFIN_TIMEOUT_MS) { jellyfin.taLastPlayed() } ?: emptyMap()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyMap()
         }
     }
 
@@ -270,6 +296,9 @@ class HomeModel(
         private const val FEATURED_COUNT = 10
         private const val MAX_PLAYLISTS = 5
         private const val RETURN_DELAY_MS = 1_000L
+
+        // Longer than this and the row shows without Jellyfin's dates
+        private const val JELLYFIN_TIMEOUT_MS = 5_000L
     }
 }
 
@@ -303,7 +332,8 @@ sealed interface ContinueItem {
 fun HomeScreen() {
     val app = LocalApp.current
     val navigator = LocalNavigator.current
-    val model = rememberPageModel("home") { scope -> HomeModel(app.api, app.history, scope) }
+    val model =
+        rememberPageModel("home") { scope -> HomeModel(app.api, app.history, app.jellyfin, scope) }
     LaunchedEffect(Unit) { model.onShown() }
     val openPlaylist: (String) -> Unit = { navigator.open(Route.Playlist(it)) }
     Column(modifier = Modifier.fillMaxSize()) {

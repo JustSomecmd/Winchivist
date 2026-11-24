@@ -217,7 +217,7 @@ internal fun playbackSource(app: AppGraph, request: PlayerRequest): PlaybackSour
     val resume = !request.fromStart && request.startSeconds == null
     return when (request) {
         is PlayerRequest.Ta -> {
-            val plain = TaPlaybackSource(app.api, app.settings, app.history, request)
+            val plain = TaPlaybackSource(app.api, app.settings, app.history, request, app.jellyfin)
             if (linked) {
                 JrwiLinkedSource(plain, app.jrwi, resume) { play -> app.jrwi.matchYoutube(play.id) }
             } else {

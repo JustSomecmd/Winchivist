@@ -2,6 +2,7 @@ package dev.jdtech.tubedroid.desktop.player
 
 import dev.jdtech.jellyfin.jrwi.JrwiItem
 import dev.jdtech.jellyfin.tubearchivist.TaApi
+import dev.jdtech.jellyfin.tubearchivist.TaChannel
 import dev.jdtech.jellyfin.tubearchivist.TaVideo
 import dev.jdtech.jellyfin.tubearchivist.loadPlaylist
 import dev.jdtech.tubedroid.desktop.AppSettings
@@ -10,6 +11,7 @@ import dev.jdtech.tubedroid.desktop.WatchHistory
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinClient
 import dev.jdtech.tubedroid.desktop.jellyfin.Languages
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
@@ -189,9 +191,13 @@ internal class TaPlaybackSource(
     private val settings: AppSettings,
     private val history: WatchHistory,
     private val request: PlayerRequest.Ta,
+    /** Told when a video plays here, so every device knows what was played last. */
+    private val jellyfin: JellyfinClient? = null,
 ) : PlaybackSource {
     private var playlist: List<TaVideo> = emptyList()
     private var name = ""
+    // The channel of each video played, for finding the video in Jellyfin
+    private val channels = ConcurrentHashMap<String, TaChannel>()
 
     override val playlistName: String
         get() = name
@@ -231,11 +237,29 @@ internal class TaPlaybackSource(
         return item.copy(resumeSeconds = startAt.takeIf { it > 1 })
     }
 
-    /** Notes the video as played, and the playlist as being at it, for Continue watching. */
+    /**
+     * Notes the video as played, and the playlist as being at it, for Continue watching. Jellyfin
+     * is told too: TubeArchivist doesn't keep when a video was played, so the apps go by Jellyfin's
+     * dates to put what was played last first, on whichever device that was.
+     */
     override suspend fun started(item: PlayItem, report: PlaybackReport) {
         history.played(item.id)
-        val playlistId = request.playlistId ?: return
-        history.updatePlaylist(playlistId, playlistName, item.id)
+        request.playlistId?.let { history.updatePlaylist(it, playlistName, item.id) }
+        val episode = jellyfinEpisode(item) ?: return
+        jellyfin?.notePlayedNow(episode)
+    }
+
+    /** Jellyfin's copy of the video, or null when not signed in to Jellyfin or it has none. */
+    private suspend fun jellyfinEpisode(item: PlayItem): UUID? {
+        val jellyfin = jellyfin?.takeIf { it.isSignedIn } ?: return null
+        val channel = channels[item.id]
+        return try {
+            jellyfin.taEpisodeId(item.id, item.title, channel?.id, channel?.name)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /** The playlist's video after [current], or its first after its last when it loops. */
@@ -262,8 +286,21 @@ internal class TaPlaybackSource(
         api.postProgress(item.id, report.seconds)
     }
 
+    /** Where it was left goes to Jellyfin's copy too, as it does when the phone app plays it. */
+    override suspend fun stopped(item: PlayItem, report: PlaybackReport) {
+        progress(item, report.copy(paused = true))
+        val episode = jellyfinEpisode(item) ?: return
+        jellyfin?.setPosition(episode, report.seconds)
+    }
+
     override suspend fun ended(item: PlayItem) {
         api.setWatched(item.id, true)
+        // Jellyfin's copy is watched too; a playlist carries on whether or not Jellyfin answers
+        try {
+            jellyfinEpisode(item)?.let { jellyfin?.setPlayed(it, true) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {}
         // The playlist carries on from the next video next time, and is done after its last
         val playlistId = request.playlistId ?: return
         if (playlist.isEmpty()) return
@@ -277,6 +314,7 @@ internal class TaPlaybackSource(
 
     private fun TaVideo.toPlayItem(fromStart: Boolean): PlayItem {
         val url = api.mediaUrl(mediaUrl) ?: error("TubeArchivist has no file for this video")
+        channel?.let { channels[youtubeId] = it }
         val resume =
             player?.position?.takeIf { position ->
                 val length = player?.duration ?: 0.0

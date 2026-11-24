@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -18,10 +17,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyGridScope
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -55,7 +50,8 @@ import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.rememberPageModel
 import dev.jdtech.tubedroid.desktop.screens.RefreshButton
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
-import dev.jdtech.tubedroid.desktop.ui.GridScrollbar
+import dev.jdtech.tubedroid.desktop.ui.BlockFlowScope
+import dev.jdtech.tubedroid.desktop.ui.BlockPage
 import dev.jdtech.tubedroid.desktop.ui.RoundIconButton
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.formatDuration
@@ -116,26 +112,18 @@ fun JrwiStatsScreen() {
                             .padding(top = Spacings.medium),
                 )
             }
-            Box(modifier = Modifier.fillMaxSize()) {
-                LazyVerticalGrid(
-                    state = model.gridState,
-                    columns = GridCells.Adaptive(minSize = CARD_MIN_WIDTH),
-                    contentPadding = PaddingValues(Spacings.default),
-                    horizontalArrangement = Arrangement.spacedBy(Spacings.medium),
-                    verticalArrangement = Arrangement.spacedBy(Spacings.medium),
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
-                        JrwiStatsHero(stats, model.status)
-                    }
-                    jrwiStatsCards(
-                        stats = stats,
-                        status = model.status,
-                        onShowClick = { navigator.open(Route.JrwiShowPage(it)) },
-                        onItemClick = { navigator.open(Route.JrwiPost(it)) },
-                    )
-                }
-                GridScrollbar(model.gridState)
+            BlockPage(
+                scroll = model.scroll,
+                minColumnWidth = CARD_MIN_WIDTH,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                FullLine(id = "hero") { JrwiStatsHero(stats, model.status) }
+                JrwiStatsCards(
+                    stats = stats,
+                    status = model.status,
+                    onShowClick = { navigator.open(Route.JrwiShowPage(it)) },
+                    onItemClick = { navigator.open(Route.JrwiPost(it)) },
+                )
             }
         }
     }
@@ -246,38 +234,66 @@ private fun JrwiHeroStat(icon: String, label: String, value: String) {
     }
 }
 
-/** The cards under the main numbers, each where it has something to show. */
-private fun LazyGridScope.jrwiStatsCards(
+/**
+ * The cards under the main numbers, each where it has something to show. Their rough heights are
+ * what shares them out over the columns: a list's goes by how long it is now, as these lists only
+ * change over months.
+ */
+@Composable
+private fun BlockFlowScope.JrwiStatsCards(
     stats: JrwiArchiveStats,
     status: JrwiStatus?,
     onShowClick: (String) -> Unit,
     onItemClick: (Long) -> Unit,
 ) {
-    if (stats.watch.total > 0) item(key = "watch") { JrwiWatchCard(stats.watch) }
-    item(key = "contents") { JrwiContentsCard(stats, status) }
+    if (stats.watch.total > 0) {
+        Block(id = "watch", about = 330.dp) { JrwiWatchCard(stats.watch) }
+    }
+    Block(id = "contents", about = 360.dp) { JrwiContentsCard(stats, status) }
     if (stats.shows.isNotEmpty()) {
-        item(key = "shows") { JrwiShowsCard(stats.shows, onShowClick) }
+        Block(id = "shows", about = 110.dp + ROW_ABOUT * minOf(stats.shows.size, 10)) {
+            JrwiShowsCard(stats.shows, onShowClick)
+        }
     }
     stats.archivedDays?.let { days ->
-        item(key = "archived") { JrwiArchivedCard(days, stats.failedChecks) }
+        Block(id = "archived", about = 270.dp) { JrwiArchivedCard(days, stats.failedChecks) }
     }
-    if (stats.byYear.isNotEmpty()) item(key = "years") { JrwiYearsCard(stats) }
+    if (stats.byYear.isNotEmpty()) {
+        Block(id = "years", about = 250.dp) { JrwiYearsCard(stats) }
+    }
     if (stats.likes > 0 || stats.comments > 0) {
-        item(key = "community") { JrwiCommunityCard(stats, onItemClick) }
+        Block(id = "community", about = 620.dp) { JrwiCommunityCard(stats, onItemClick) }
     }
-    item(key = "records") { JrwiRecordsCard(stats, onItemClick) }
+    Block(id = "records", about = 260.dp) { JrwiRecordsCard(stats, onItemClick) }
     if (stats.bothVersions > 0 || stats.heights.isNotEmpty()) {
-        item(key = "versions") { JrwiVersionsCard(stats) }
+        Block(id = "versions", about = 200.dp + ROW_ABOUT * stats.heights.size) {
+            JrwiVersionsCard(stats)
+        }
     }
     // What the archiver counts itself
     stats.extra?.let { extra ->
-        if (extra.checks.isNotEmpty()) item(key = "checks") { JrwiChecksCard(extra.checks) }
-        if (extra.files.isNotEmpty()) item(key = "files") { JrwiFilesCard(extra.files) }
+        if (extra.checks.isNotEmpty()) {
+            Block(id = "checks", about = 60.dp + ROW_ABOUT * extra.checks.size) {
+                JrwiChecksCard(extra.checks)
+            }
+        }
+        if (extra.files.isNotEmpty()) {
+            Block(id = "files", about = 60.dp + ROW_ABOUT * extra.files.size) {
+                JrwiFilesCard(extra.files)
+            }
+        }
         extra.comments
             ?.takeIf { it.total > 0 }
-            ?.let { comments -> item(key = "commenters") { JrwiCommentersCard(comments) } }
+            ?.let { comments ->
+                Block(id = "commenters", about = 150.dp + ROW_ABOUT * comments.top.size) {
+                    JrwiCommentersCard(comments)
+                }
+            }
     }
 }
+
+/** About how tall a line of a card's list is, for sharing the cards out. */
+private val ROW_ABOUT = 44.dp
 
 /** How much of the archive was watched or listened to, by playing time. */
 @Composable

@@ -5,7 +5,10 @@ import dev.jdtech.jellyfin.tubearchivist.TaPlaylistSessionSync
 import dev.jdtech.tubedroid.desktop.AppSettings
 import dev.jdtech.tubedroid.desktop.player.StreamQuality
 import java.net.InetAddress
+import java.time.LocalDateTime
+import java.time.ZoneId
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -58,6 +61,7 @@ import org.jellyfin.sdk.model.api.SortOrder
 import org.jellyfin.sdk.model.api.SubtitleDeliveryMethod
 import org.jellyfin.sdk.model.api.SubtitleProfile
 import org.jellyfin.sdk.model.api.TranscodingProfile
+import org.jellyfin.sdk.model.api.UpdateUserItemDataDto
 
 /**
  * Jellyfin, through its own Kotlin library, as the phone app uses it. Signing in keeps the server,
@@ -436,6 +440,132 @@ class JellyfinClient(private val settings: AppSettings) {
         }
     }
 
+    // TubeArchivist's videos as Jellyfin has them. TubeArchivist doesn't keep when a video was
+    // played and Jellyfin does, so Jellyfin's dates put Continue watching in the same order on
+    // every device: the phone app plays these videos through Jellyfin, and this app, which plays
+    // them from TubeArchivist, tells Jellyfin when it does.
+
+    private val taEpisodes = ConcurrentHashMap<String, UUID>()
+    private val taShows = ConcurrentHashMap<String, UUID>()
+
+    /**
+     * When TubeArchivist's videos were last played on any device, by video ID, in milliseconds, for
+     * the [limit] items played last.
+     */
+    suspend fun taLastPlayed(limit: Int = 100): Map<String, Long> =
+        withContext(Dispatchers.IO) {
+            val items =
+                api.libraryApi
+                    .getItems(
+                        userId = userId,
+                        includeItemTypes = listOf(BaseItemKind.EPISODE),
+                        recursive = true,
+                        sortBy = listOf(ItemSortBy.DATE_PLAYED),
+                        sortOrder = listOf(SortOrder.DESCENDING),
+                        fields = FILE_FIELDS,
+                        limit = limit,
+                        enableUserData = true,
+                        enableImages = false,
+                    )
+                    .content
+                    .items
+            val played = mutableMapOf<String, Long>()
+            for (item in items) {
+                val videoId = item.tubeArchivistId() ?: continue
+                taEpisodes[videoId] = item.id
+                // Never played comes as year 1, or not at all
+                val date = item.userData?.lastPlayedDate?.takeIf { it.year > 1970 } ?: continue
+                played[videoId] = date.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            }
+            played
+        }
+
+    /**
+     * The Jellyfin episode of a TubeArchivist video, found as the phone app finds it: by its title,
+     * or else among its channel's episodes. Null when Jellyfin doesn't have it (yet).
+     */
+    suspend fun taEpisodeId(
+        videoId: String,
+        title: String,
+        channelId: String?,
+        channelName: String?,
+    ): UUID? =
+        withContext(Dispatchers.IO) {
+            taEpisodes[videoId]?.let {
+                return@withContext it
+            }
+            val term = title.trim().take(TA_SEARCH_LENGTH)
+            if (term.isNotEmpty()) {
+                val found =
+                    api.libraryApi
+                        .getItems(
+                            userId = userId,
+                            searchTerm = term,
+                            includeItemTypes = listOf(BaseItemKind.EPISODE),
+                            recursive = true,
+                            fields = FILE_FIELDS,
+                            limit = 25,
+                            enableUserData = false,
+                        )
+                        .content
+                        .items
+                rememberTaEpisodes(found)
+                taEpisodes[videoId]?.let {
+                    return@withContext it
+                }
+            }
+            val showId = channelId?.let { taShowId(it, channelName) } ?: return@withContext null
+            rememberTaEpisodes(episodeFiles(showId))
+            taEpisodes[videoId]
+        }
+
+    /** The Jellyfin show of a TubeArchivist channel. */
+    private suspend fun taShowId(channelId: String, channelName: String?): UUID? {
+        taShows[channelId]?.let {
+            return it
+        }
+        val named = channelName?.trim()?.take(TA_SEARCH_LENGTH).orEmpty()
+        if (named.isNotEmpty()) {
+            seriesNamed(named).forEach { show ->
+                show.tubeArchivistId()?.let { taShows[it] = show.id }
+            }
+            taShows[channelId]?.let {
+                return it
+            }
+        }
+        val shows =
+            api.libraryApi
+                .getItems(
+                    userId = userId,
+                    includeItemTypes = listOf(BaseItemKind.SERIES),
+                    recursive = true,
+                    fields = FILE_FIELDS,
+                    enableUserData = false,
+                )
+                .content
+                .items
+        shows.forEach { show -> show.tubeArchivistId()?.let { taShows[it] = show.id } }
+        return taShows[channelId]
+    }
+
+    private fun rememberTaEpisodes(items: List<BaseItemDto>) {
+        items.forEach { item -> item.tubeArchivistId()?.let { taEpisodes[it] = item.id } }
+    }
+
+    /**
+     * Notes in Jellyfin that an item was played just now, without playing it there. Only the date
+     * is sent, which leaves where it was left and whether it's watched as they are.
+     */
+    suspend fun notePlayedNow(id: UUID) {
+        withContext(Dispatchers.IO) {
+            api.userDataApi.updateItemUserData(
+                itemId = id,
+                userId = userId,
+                data = UpdateUserItemDataDto(lastPlayedDate = LocalDateTime.now()),
+            )
+        }
+    }
+
     /**
      * Asks Jellyfin how to play an item, as its own apps do first: the file and its tracks, the
      * tracks the user's settings pick, and a play session to report on.
@@ -695,6 +825,7 @@ class JellyfinClient(private val settings: AppSettings) {
 
     companion object {
         private val FILE_FIELDS = listOf(ItemFields.PROVIDER_IDS, ItemFields.PATH)
+        private const val TA_SEARCH_LENGTH = 60
         private val PLAYED_KINDS = listOf(BaseItemKind.EPISODE, BaseItemKind.MOVIE)
         private const val IDS_PAGE = 1000
         private const val MAX_IDS = 200_000

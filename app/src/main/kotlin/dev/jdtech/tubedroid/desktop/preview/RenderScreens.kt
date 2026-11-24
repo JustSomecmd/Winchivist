@@ -229,6 +229,41 @@ fun main(args: Array<String>) {
         shell.closePlayer()
         scene.close()
 
+        // The pages made of blocks, whole: in a tall window, and in a wide one with three columns
+        for ((suffix, width, height) in
+            listOf(Triple("tall", 1360, 2600), Triple("wide", 1760, 1800))) {
+            val blockShell = Shell(graph.audio)
+            val blockScene =
+                ImageComposeScene(width = width, height = height, density = Density(1f)) {
+                    CompositionLocalProvider(
+                        LocalApp provides graph,
+                        LocalWindowState provides WindowState(),
+                    ) {
+                        TubedroidTheme(accent = settings.accent) { ShellContent(blockShell) }
+                    }
+                }
+            val pages =
+                listOf(
+                    Section.STATS to "stats",
+                    Section.JRWI_STATS to "jrwi-stats",
+                    Section.JRWI_ARCHIVER to "jrwi-archiver",
+                    Section.JRWI_COMPUTE to "jrwi-compute",
+                )
+            for ((section, name) in pages) {
+                blockShell.select(section)
+                repeat(16) {
+                    blockScene.render(time)
+                    time += 200_000_000L
+                    delay(200)
+                }
+                blockScene.render(time).encodeToData(EncodedImageFormat.PNG)?.let {
+                    File(output, "$name-$suffix.png").writeBytes(it.bytes)
+                }
+                println("Rendered $name-$suffix")
+            }
+            blockScene.close()
+        }
+
         // The playlist beside the video, as the player shows it, with the video's place left black
         val playlistScene =
             ImageComposeScene(width = 1360, height = 860, density = Density(1f)) {

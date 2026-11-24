@@ -8,15 +8,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -48,7 +44,7 @@ import dev.jdtech.tubedroid.desktop.compute.HearJob
 import dev.jdtech.tubedroid.desktop.compute.Heard
 import dev.jdtech.tubedroid.desktop.screens.RefreshButton
 import dev.jdtech.tubedroid.desktop.screens.openFolder
-import dev.jdtech.tubedroid.desktop.ui.GridScrollbar
+import dev.jdtech.tubedroid.desktop.ui.BlockPage
 import dev.jdtech.tubedroid.desktop.ui.RoundIconButton
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.formatDuration
@@ -83,28 +79,18 @@ fun JrwiComputeScreen() {
                     onClick = { openUrl(app.jrwi.api.fileUrl(TRANSCRIPTS_PATH)) },
                 )
             }
-            val gridState = rememberLazyGridState()
-            Box(modifier = Modifier.fillMaxSize()) {
-                LazyVerticalGrid(
-                    state = gridState,
-                    columns = GridCells.Adaptive(minSize = CARD_MIN_WIDTH),
-                    contentPadding = PaddingValues(Spacings.default),
-                    horizontalArrangement = Arrangement.spacedBy(Spacings.medium),
-                    verticalArrangement = Arrangement.spacedBy(Spacings.medium),
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    item(key = "status", span = { GridItemSpan(maxLineSpan) }) {
-                        ComputeStatusCard(box, app.settings)
-                    }
-                    item(key = "actions", span = { GridItemSpan(maxLineSpan) }) {
-                        ComputeActions(box, app.settings)
-                    }
-                    item(key = "settings") { ComputeSettingsCard(app.settings) }
-                    item(key = "pc") { ComputePcCard(box, app.settings) }
-                    item(key = "heard") { ComputeHeardCard(box.heard, open) }
-                    item(key = "waiting") { ComputeWaitingCard(box, open) }
-                }
-                GridScrollbar(gridState)
+            BlockPage(
+                scroll = rememberScrollState(),
+                minColumnWidth = CARD_MIN_WIDTH,
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                FullLine(id = "status") { ComputeStatusCard(box, app.settings) }
+                FullLine(id = "actions") { ComputeActions(box, app.settings) }
+                // The lists grow while it hears, so their rough heights are fixed ones
+                Block(id = "settings", about = 620.dp) { ComputeSettingsCard(app.settings) }
+                Block(id = "pc", about = 340.dp) { ComputePcCard(box, app.settings) }
+                Block(id = "heard", about = 280.dp) { ComputeHeardCard(box.heard, open) }
+                Block(id = "waiting", about = 520.dp) { ComputeWaitingCard(box, open) }
             }
         }
     }

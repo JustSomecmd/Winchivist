@@ -1,6 +1,6 @@
 package dev.jdtech.tubedroid.desktop.jrwi
 
-import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.ScrollState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -160,7 +160,7 @@ class JrwiStatsModel(private val repository: JrwiRepository, private val scope: 
     var error by mutableStateOf<String?>(null)
         private set
 
-    val gridState = LazyGridState()
+    val scroll = ScrollState(0)
 
     /** Loads the numbers unless they're in for this archiver, then follows the status. */
     suspend fun follow() {

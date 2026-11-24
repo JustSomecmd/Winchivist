@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -21,9 +20,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -57,6 +54,7 @@ import dev.jdtech.jellyfin.tubearchivist.TaVideoStats
 import dev.jdtech.jellyfin.tubearchivist.TaVideoTotals
 import dev.jdtech.jellyfin.tubearchivist.TaWatchStats
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
+import dev.jdtech.tubedroid.desktop.ui.BlockPage
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.errorText
 import dev.jdtech.tubedroid.desktop.ui.formatNumber
@@ -188,32 +186,36 @@ fun TaHomeStatsPage(
                 }
             !stats.loaded -> CircularProgressIndicator(Modifier.align(Alignment.Center))
             else ->
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 360.dp),
+                BlockPage(
+                    scroll = rememberScrollState(),
+                    minColumnWidth = 360.dp,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(Spacings.default),
-                    horizontalArrangement = Arrangement.spacedBy(Spacings.medium),
-                    verticalArrangement = Arrangement.spacedBy(Spacings.medium),
                 ) {
-                    item(span = { GridItemSpan(maxLineSpan) }, key = "hero") {
+                    OwnWidthBlock(id = "hero", about = 240.dp) {
                         TaStatsHero(stats = stats, version = version)
                     }
                     stats.watch
                         ?.takeIf { it.watched != null || it.unwatched != null }
-                        ?.let { watch -> item(key = "watch") { TaWatchCard(watch) } }
+                        ?.let { watch ->
+                            Block(id = "watch", about = 232.dp) { TaWatchCard(watch) }
+                        }
                     stats.videos?.let { videos ->
-                        item(key = "types") { TaVideoTypesCard(videos, stats.metricSizes) }
+                        Block(id = "types", about = 265.dp) {
+                            TaVideoTypesCard(videos, stats.metricSizes)
+                        }
                     }
                     if (stats.channels != null || stats.playlists != null) {
-                        item(key = "library") { TaLibraryCard(stats.channels, stats.playlists) }
+                        Block(id = "library", about = 160.dp) {
+                            TaLibraryCard(stats.channels, stats.playlists)
+                        }
                     }
                     if (stats.downloads != null || stats.history != null) {
-                        item(key = "downloads") {
+                        Block(id = "downloads", about = 330.dp) {
                             TaDownloadsStatsCard(stats.downloads, stats.history, stats.metricSizes)
                         }
                     }
                     if (stats.biggest.isNotEmpty()) {
-                        item(key = "biggest") {
+                        Block(id = "biggest", about = 560.dp) {
                             TaBiggestChannelsCard(
                                 biggest = stats.biggest,
                                 metricSizes = stats.metricSizes,
@@ -239,8 +241,9 @@ private fun TaStatsHero(stats: TaServerStats, version: String?) {
             0.5f to Color.Black.copy(alpha = 0.5f),
             1f to Color.Black.copy(alpha = 0.65f),
         )
-    // Where the channel carousel is on the other side, as tall as its pages
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+    // Where the channel carousel is on the other side, as tall as its pages. It keeps that size,
+    // so in a wide window other cards sit beside it
+    BoxWithConstraints {
         val spacing = Spacings.medium
         val pages = carouselPages(maxWidth)
         val pageWidth = (maxWidth - spacing * (pages - 1)) / pages
