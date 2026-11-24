@@ -287,9 +287,7 @@ fun JrwiPictureViewer(pictures: JrwiPictures, onClose: () -> Unit) {
                             modifier = Modifier.align(Alignment.Center),
                         ) {
                             Text(text = "${shown.name} couldn't be shown.", color = Color.White)
-                            TextButton(onClick = { lookUp(index, again = true) }) {
-                                Text("Retry")
-                            }
+                            TextButton(onClick = { lookUp(index, again = true) }) { Text("Retry") }
                         }
                     shown is JrwiShown.Pdf && pdf == null ->
                         CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))

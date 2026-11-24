@@ -148,9 +148,7 @@ class JrwiArchiverModel(private val repository: JrwiRepository, private val scop
         val since = OffsetDateTime.now().minusDays(EVENT_DAYS).truncatedTo(ChronoUnit.SECONDS)
         val newEvents = async { part { api.getEvents(since.toString()) } }
         val newProblems = async { part { api.getProblems() } }
-        val newPodcast = async {
-            if (has(JrwiFeature.PODCAST)) part { api.getPodcast() } else null
-        }
+        val newPodcast = async { if (has(JrwiFeature.PODCAST)) part { api.getPodcast() } else null }
         val newStats = async {
             if (features?.contains(JrwiFeature.STATS) != false) part { api.getStats() } else null
         }

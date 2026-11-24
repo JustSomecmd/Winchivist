@@ -440,18 +440,14 @@ private fun JrwiItemList(model: JrwiItemModel, item: JrwiItem, content: JrwiPost
                 jrwiPostContent(
                     post = post,
                     files = files,
-                    onPicture = { at ->
-                        navigator.showPictures(JrwiPictures(viewerItems, at))
-                    },
+                    onPicture = { at -> navigator.showPictures(JrwiPictures(viewerItems, at)) },
                     onFile = { file, listed ->
                         openPostFile(app, navigator, file, listed, viewerItems)
                     },
                 )
         }
         item(key = "comments-title") {
-            PostColumn {
-                JrwiSectionTitle("Comments" + (comments.total?.let { " ($it)" } ?: ""))
-            }
+            PostColumn { JrwiSectionTitle("Comments" + (comments.total?.let { " ($it)" } ?: "")) }
         }
         items(flatComments, key = { "comment:" + it.comment.id }, contentType = { "comment" }) {
             flat ->
@@ -646,6 +642,7 @@ private fun JrwiItemHeader(model: JrwiItemModel, item: JrwiItem) {
     val playable = item.video != null || item.audio != null
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val wide = maxWidth >= 760.dp
+        val pictureWidth = maxWidth * 0.44f
         val picture: @Composable (Modifier) -> Unit = { modifier ->
             Box(modifier = modifier) {
                 // With its own bar, for the version that's picked
@@ -660,7 +657,7 @@ private fun JrwiItemHeader(model: JrwiItemModel, item: JrwiItem) {
         }
         if (wide && playable) {
             Row(horizontalArrangement = Arrangement.spacedBy(Spacings.default)) {
-                picture(Modifier.width(maxWidth * 0.44f))
+                picture(Modifier.width(pictureWidth))
                 Column(modifier = Modifier.weight(1f)) { JrwiItemDetails(model, item) }
             }
         } else {
