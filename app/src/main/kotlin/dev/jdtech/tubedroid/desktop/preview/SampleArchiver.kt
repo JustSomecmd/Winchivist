@@ -462,7 +462,7 @@ internal class SampleArchiver {
                 ) {
                     "image/png" to picture(path)
                 } else {
-                    "application/json" to (answer(path) ?: "{}").toByteArray()
+                    "application/json" to (answer(path, query) ?: "{}").toByteArray()
                 }
             exchange.responseHeaders.add("Content-Type", type)
             exchange.sendResponseHeaders(200, body.size.toLong())
@@ -497,7 +497,7 @@ internal class SampleArchiver {
         }
     }
 
-    private fun answer(path: String): String? {
+    private fun answer(path: String, query: String): String? {
         val parts = path.trim('/').split('/')
         if (parts.firstOrNull() != "api") return null
         val id = parts.getOrNull(2)?.toLongOrNull()
@@ -620,6 +620,8 @@ internal class SampleArchiver {
             "items",
             "posts" ->
                 when {
+                    // None of the sample's videos are on YouTube
+                    id == null && "youtube_id=" in query -> page(JrwiItem.serializer(), emptyList())
                     id == null -> page(JrwiItem.serializer(), everything)
                     parts.getOrNull(3) == "comments" ->
                         page(JrwiComment.serializer(), SampleArchive.comments)

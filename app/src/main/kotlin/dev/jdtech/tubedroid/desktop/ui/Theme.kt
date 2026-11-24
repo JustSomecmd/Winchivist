@@ -3,12 +3,15 @@ package dev.jdtech.tubedroid.desktop.ui
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.LocalScrollbarStyle
+import androidx.compose.foundation.ScrollbarStyle
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
@@ -84,8 +87,21 @@ val accentSeeds =
 @Composable
 fun TubedroidTheme(accent: String, content: @Composable () -> Unit) {
     val scheme = remember(accent) { darkScheme.withAccent(accent) }
-    MaterialTheme(colorScheme = scheme, shapes = appShapes, content = content)
+    MaterialTheme(colorScheme = scheme, shapes = appShapes) {
+        CompositionLocalProvider(LocalScrollbarStyle provides scrollbars, content = content)
+    }
 }
+
+// Light on the app's dark pages; the ones Compose starts with are dark, and hardly show
+private val scrollbars =
+    ScrollbarStyle(
+        minimalHeight = 32.dp,
+        thickness = 8.dp,
+        shape = RoundedCornerShape(4.dp),
+        hoverDurationMillis = 300,
+        unhoverColor = Color.White.copy(alpha = 0.16f),
+        hoverColor = Color.White.copy(alpha = 0.42f),
+    )
 
 /** The dark scheme with its accent colors made from a preset, as the phone app does. */
 private fun ColorScheme.withAccent(accent: String): ColorScheme {
