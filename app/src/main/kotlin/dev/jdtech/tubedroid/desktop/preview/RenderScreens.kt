@@ -1,16 +1,24 @@
 package dev.jdtech.tubedroid.desktop.preview
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.WindowState
 import com.sun.net.httpserver.HttpServer
 import dev.jdtech.jellyfin.tubearchivist.TaBiggestChannel
@@ -53,7 +61,9 @@ import dev.jdtech.tubedroid.desktop.player.PlayerActions
 import dev.jdtech.tubedroid.desktop.player.PlayerOsd
 import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 import dev.jdtech.tubedroid.desktop.player.PlayerSession
+import dev.jdtech.tubedroid.desktop.player.PlayerSettings
 import dev.jdtech.tubedroid.desktop.player.PlaylistPanel
+import dev.jdtech.tubedroid.desktop.player.SettingsPage
 import dev.jdtech.tubedroid.desktop.player.TaPlaybackSource
 import dev.jdtech.tubedroid.desktop.screens.ChannelModel
 import dev.jdtech.tubedroid.desktop.screens.SearchModel
@@ -294,6 +304,50 @@ fun main(args: Array<String>) {
         }
         println("Rendered player-osd")
         osdScene.close()
+
+        // The settings menu's pages side by side, each as the menu draws it
+        val menuScene =
+            ImageComposeScene(width = 960, height = 480, density = Density(1f)) {
+                CompositionLocalProvider(LocalApp provides graph) {
+                    TubedroidTheme(accent = settings.accent) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(24.dp),
+                            modifier =
+                                Modifier.fillMaxSize()
+                                    .background(ComposeColor(0xFF101216))
+                                    .padding(24.dp),
+                        ) {
+                            listOf(SettingsPage.MAIN, SettingsPage.SLEEP, SettingsPage.CHAPTERS)
+                                .forEach { page ->
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = MaterialTheme.colorScheme.surfaceContainer,
+                                        modifier = Modifier.width(280.dp),
+                                    ) {
+                                        Column {
+                                            PlayerSettings(
+                                                session = osdSession,
+                                                page = page,
+                                                onPage = {},
+                                                onClose = {},
+                                            )
+                                        }
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+        repeat(4) {
+            menuScene.render(time)
+            time += 200_000_000L
+            delay(100)
+        }
+        menuScene.render(time).encodeToData(EncodedImageFormat.PNG)?.let {
+            File(output, "player-menu.png").writeBytes(it.bytes)
+        }
+        println("Rendered player-menu")
+        menuScene.close()
 
         val firstRun =
             ImageComposeScene(width = 1360, height = 860, density = Density(1f)) {

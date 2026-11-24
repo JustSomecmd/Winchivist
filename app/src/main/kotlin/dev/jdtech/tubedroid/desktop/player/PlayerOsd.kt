@@ -491,7 +491,7 @@ private fun barColor(session: PlayerSession): Color =
     if (session.item?.jrwi != null) JrwiPurple.Accent else MaterialTheme.colorScheme.primary
 
 /** The settings menu's pages: the list of settings, or the choices of one of them. */
-private enum class SettingsPage {
+internal enum class SettingsPage {
     MAIN,
     SPEED,
     QUALITY,
@@ -506,7 +506,6 @@ private enum class SettingsPage {
  */
 @Composable
 private fun SettingsMenu(session: PlayerSession, onMenu: (open: Boolean) -> Unit) {
-    val settings = LocalApp.current.settings
     var open by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf(SettingsPage.MAIN) }
     fun setOpen(value: Boolean) {
@@ -517,80 +516,91 @@ private fun SettingsMenu(session: PlayerSession, onMenu: (open: Boolean) -> Unit
     Box {
         OsdButton(icon = "ic_settings", label = "Settings", onClick = { setOpen(true) })
         DropdownMenu(expanded = open, onDismissRequest = { setOpen(false) }) {
-            when (page) {
-                SettingsPage.MAIN -> {
-                    SettingRow("Speed", speedLabel(session.speed)) { page = SettingsPage.SPEED }
-                    if (session.canChooseQuality) {
-                        SettingRow("Quality", StreamQuality.fromKey(settings.streamQuality).label) {
-                            page = SettingsPage.QUALITY
-                        }
-                    }
-                    SettingRow("Sleep timer", sleepLabel(session.sleep)) {
-                        page = SettingsPage.SLEEP
-                    }
-                    if (session.chapters.size > 1) {
-                        SettingRow("Chapters", "${session.chapters.size}") {
-                            page = SettingsPage.CHAPTERS
-                        }
-                    }
-                    HorizontalDivider()
-                    ChoiceRow("Autoplay", settings.autoplay) {
-                        settings.autoplay = !settings.autoplay
-                    }
-                    ChoiceRow("Zoom to fill", session.fills) { session.toggleFill() }
-                    ChoiceRow("Playback info", session.statsShown) {
-                        session.toggleStats()
-                        setOpen(false)
-                    }
+            PlayerSettings(
+                session = session,
+                page = page,
+                onPage = { page = it },
+                onClose = { setOpen(false) },
+            )
+        }
+    }
+}
+
+/** What the settings menu holds, on its [page]. */
+@Composable
+internal fun PlayerSettings(
+    session: PlayerSession,
+    page: SettingsPage,
+    onPage: (SettingsPage) -> Unit,
+    onClose: () -> Unit,
+) {
+    val settings = LocalApp.current.settings
+    when (page) {
+        SettingsPage.MAIN -> {
+            SettingRow("Speed", speedLabel(session.speed)) { onPage(SettingsPage.SPEED) }
+            if (session.canChooseQuality) {
+                SettingRow("Quality", StreamQuality.fromKey(settings.streamQuality).label) {
+                    onPage(SettingsPage.QUALITY)
                 }
-                SettingsPage.SPEED -> {
-                    BackRow("Speed") { page = SettingsPage.MAIN }
-                    PlayerSession.SPEEDS.forEach { speed ->
-                        ChoiceRow(speedLabel(speed), abs(speed - session.speed) < 0.01) {
-                            session.changeSpeed(speed)
-                            setOpen(false)
-                        }
-                    }
+            }
+            SettingRow("Sleep timer", sleepLabel(session.sleep)) { onPage(SettingsPage.SLEEP) }
+            if (session.chapters.size > 1) {
+                SettingRow("Chapters", "${session.chapters.size}") { onPage(SettingsPage.CHAPTERS) }
+            }
+            HorizontalDivider()
+            ChoiceRow("Autoplay", settings.autoplay) { settings.autoplay = !settings.autoplay }
+            ChoiceRow("Zoom to fill", session.fills) { session.toggleFill() }
+            ChoiceRow("Playback info", session.statsShown) {
+                session.toggleStats()
+                onClose()
+            }
+        }
+        SettingsPage.SPEED -> {
+            BackRow("Speed") { onPage(SettingsPage.MAIN) }
+            PlayerSession.SPEEDS.forEach { speed ->
+                ChoiceRow(speedLabel(speed), abs(speed - session.speed) < 0.01) {
+                    session.changeSpeed(speed)
+                    onClose()
                 }
-                SettingsPage.QUALITY -> {
-                    BackRow("Quality") { page = SettingsPage.MAIN }
-                    StreamQuality.entries.forEach { quality ->
-                        ChoiceRow(quality.label, settings.streamQuality == quality.key) {
-                            session.changeQuality(quality)
-                            setOpen(false)
-                        }
-                    }
+            }
+        }
+        SettingsPage.QUALITY -> {
+            BackRow("Quality") { onPage(SettingsPage.MAIN) }
+            StreamQuality.entries.forEach { quality ->
+                ChoiceRow(quality.label, settings.streamQuality == quality.key) {
+                    session.changeQuality(quality)
+                    onClose()
                 }
-                SettingsPage.SLEEP -> {
-                    BackRow("Sleep timer") { page = SettingsPage.MAIN }
-                    ChoiceRow("Off", session.sleep == null) {
-                        session.cancelSleep()
-                        setOpen(false)
-                    }
-                    SLEEP_MINUTES.forEach { minutes ->
-                        ChoiceRow("$minutes minutes", false) {
-                            session.sleepIn(minutes)
-                            setOpen(false)
-                        }
-                    }
-                    ChoiceRow("The end of the video", session.sleep?.atEnd == true) {
-                        session.sleepAtEnd()
-                        setOpen(false)
-                    }
+            }
+        }
+        SettingsPage.SLEEP -> {
+            BackRow("Sleep timer") { onPage(SettingsPage.MAIN) }
+            ChoiceRow("Off", session.sleep == null) {
+                session.cancelSleep()
+                onClose()
+            }
+            SLEEP_MINUTES.forEach { minutes ->
+                ChoiceRow("$minutes minutes", false) {
+                    session.sleepIn(minutes)
+                    onClose()
                 }
-                SettingsPage.CHAPTERS -> {
-                    BackRow("Chapters") { page = SettingsPage.MAIN }
-                    session.chapters.forEachIndexed { index, start ->
-                        val title = session.chapterTitles.getOrNull(index).orEmpty()
-                        val next = session.chapters.getOrNull(index + 1) ?: Double.MAX_VALUE
-                        ChoiceRow(
-                            text = "${formatDuration(start)}  $title",
-                            selected = session.position >= start && session.position < next,
-                        ) {
-                            session.seekTo(start)
-                            setOpen(false)
-                        }
-                    }
+            }
+            ChoiceRow("The end of the video", session.sleep?.atEnd == true) {
+                session.sleepAtEnd()
+                onClose()
+            }
+        }
+        SettingsPage.CHAPTERS -> {
+            BackRow("Chapters") { onPage(SettingsPage.MAIN) }
+            session.chapters.forEachIndexed { index, start ->
+                val title = session.chapterTitles.getOrNull(index).orEmpty()
+                val next = session.chapters.getOrNull(index + 1) ?: Double.MAX_VALUE
+                ChoiceRow(
+                    text = "${formatDuration(start)}  $title",
+                    selected = session.position >= start && session.position < next,
+                ) {
+                    session.seekTo(start)
+                    onClose()
                 }
             }
         }
