@@ -9,8 +9,10 @@ import dev.jdtech.jellyfin.jrwi.JrwiApiException
 import dev.jdtech.jellyfin.jrwi.JrwiItem
 import dev.jdtech.jellyfin.jrwi.JrwiProgress
 import dev.jdtech.jellyfin.jrwi.JrwiShow
+import dev.jdtech.jellyfin.jrwi.JrwiTranscript
 import dev.jdtech.jellyfin.tubearchivist.TaApi
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinClient
+import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 import java.io.IOException
 import java.time.OffsetDateTime
 import java.util.UUID
@@ -418,15 +420,28 @@ class JrwiRepository(
         }
     }
 
+    /** Jellyfin's copy of the item's archived video, when it was looked up before. */
+    fun knownEpisodeId(item: JrwiItem): UUID? = item.video?.let { episodeIds[it.postId] }
+
     /**
-     * The archive's item of a TubeArchivist video, when it's one of its YouTube-only videos. An
-     * item whose own video is archived plays from Jellyfin instead, so it isn't one.
+     * What the archive has for a TubeArchivist video. For one of its YouTube-only videos, the item,
+     * whose place the archive keeps. For the YouTube upload of an episode whose own video is
+     * archived, which plays from Jellyfin and keeps its place there, only the YouTube post's
+     * transcript, if it has one. Null for any other video.
      */
-    suspend fun itemForYoutube(youtubeId: String): JrwiItem? {
+    suspend fun matchYoutube(youtubeId: String): JrwiMatch? {
         if (!api.isConfigured) return null
         return try {
-            api.search(youtubeId = youtubeId, pageSize = 5).items.firstOrNull {
-                it.video?.youtubeId == youtubeId
+            val items = api.search(youtubeId = youtubeId, pageSize = 5).items
+            val own = items.firstOrNull { it.video?.youtubeId == youtubeId }
+            when {
+                own != null -> JrwiMatch(own, own.transcriptPost(audio = false))
+                items.any { it.transcript } ->
+                    api.getPosts(youtubeId = youtubeId, pageSize = 5)
+                        .items
+                        .firstOrNull { it.transcript }
+                        ?.let { JrwiMatch(null, it.id) }
+                else -> null
             }
         } catch (e: CancellationException) {
             throw e
@@ -435,15 +450,93 @@ class JrwiRepository(
         }
     }
 
+    /**
+     * How to play the item's video: from TubeArchivist when it's only on YouTube, from Jellyfin
+     * when it has the archived file, or else straight from the archive. Null when it has no video,
+     * or one on YouTube with TubeArchivist not set up.
+     */
+    suspend fun videoRequest(
+        item: JrwiItem,
+        fromStart: Boolean = false,
+        startSeconds: Double? = null,
+    ): PlayerRequest? {
+        val video = item.video ?: return null
+        if (video.isYoutube) {
+            val youtubeId = video.youtubeId?.takeIf { ta.isConfigured } ?: return null
+            return PlayerRequest.Ta(youtubeId, fromStart = fromStart, startSeconds = startSeconds)
+        }
+        val episodeId = episodeId(item)
+        return if (episodeId != null) {
+            PlayerRequest.Jellyfin(episodeId.toString(), fromStart, startSeconds)
+        } else {
+            PlayerRequest.Jrwi(item.id, audio = false, fromStart, startSeconds)
+        }
+    }
+
+    /**
+     * The item after [item] as its show's page lists it: in its own tab, oldest first, so in
+     * Episodes by season and number. Null at the show's end.
+     */
+    suspend fun nextInShow(item: JrwiItem): JrwiItem? {
+        var found = false
+        for (page in 1..NEXT_MAX_PAGES) {
+            val result =
+                api.getShowItems(
+                    showId = item.show,
+                    tab = item.tab,
+                    page = page,
+                    order = "asc",
+                    pageSize = NEXT_PAGE_SIZE,
+                )
+            for (entry in result.items) {
+                if (found) return entry
+                if (entry.id == item.id) found = true
+            }
+            if (!result.hasMore) break
+        }
+        return null
+    }
+
+    // Transcripts: the last two read, for a while, so one that gets timed meanwhile is read again
+
+    private class KeptTranscript(val transcript: JrwiTranscript, val at: Long)
+
+    private val transcripts = LinkedHashMap<Long, KeptTranscript>()
+
+    /** The transcript of the post [postId], timed in that post's timeline once it's timed. */
+    suspend fun transcript(postId: Long): JrwiTranscript {
+        val now = System.currentTimeMillis()
+        synchronized(transcripts) {
+            transcripts[postId]?.let { if (now - it.at < TRANSCRIPT_KEPT_MS) return it.transcript }
+        }
+        val read = api.getTranscript(postId)
+        synchronized(transcripts) {
+            transcripts.remove(postId)
+            transcripts[postId] = KeptTranscript(read, now)
+            while (transcripts.size > TRANSCRIPTS_KEPT) transcripts.remove(transcripts.keys.first())
+        }
+        return read
+    }
+
     private companion object {
         const val SHOWS_KEPT_MS = 5 * 60_000L
         const val PING_KEPT_MS = 15 * 60_000L
         const val SEARCH_LENGTH = 60
         const val FEATURE_WATCHED = "watched"
         const val OWN_WATCHED_AT = 0.9
+        const val NEXT_PAGE_SIZE = 200
+        const val NEXT_MAX_PAGES = 10
+        const val TRANSCRIPT_KEPT_MS = 10 * 60_000L
+        const val TRANSCRIPTS_KEPT = 2
         val JSON_TYPE = "application/json".toMediaType()
     }
 }
+
+/**
+ * What the archive has for something that plays from elsewhere: its [item], when it keeps the
+ * episode's place, and the post whose transcript follows it, if any.
+ */
+class JrwiMatch(val item: JrwiItem?, val transcriptPost: Long?)
 
 /**
  * The JRWI post ID of a Jellyfin item: the provider ID from the archiver's .nfo file, or else the

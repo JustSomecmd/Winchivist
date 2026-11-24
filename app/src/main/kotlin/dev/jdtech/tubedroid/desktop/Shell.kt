@@ -63,6 +63,9 @@ import dev.jdtech.tubedroid.desktop.jrwi.JrwiSheetTheme
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiShowScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiShowsScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiStatsScreen
+import dev.jdtech.tubedroid.desktop.player.AudioBar
+import dev.jdtech.tubedroid.desktop.player.AudioPlayer
+import dev.jdtech.tubedroid.desktop.player.AudioScreen
 import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 import dev.jdtech.tubedroid.desktop.player.PlayerScreen
 import dev.jdtech.tubedroid.desktop.screens.ChannelScreen
@@ -90,9 +93,10 @@ import kotlinx.coroutines.launch
 
 /**
  * The window's sections and their history, the player when a video plays, and messages at the
- * bottom. Each section keeps its own pages, so switching sections and back keeps your place.
+ * bottom. Each section keeps its own pages, so switching sections and back keeps your place. The
+ * [audio] player is the app's, which the video player takes over from and hands back to.
  */
-class Shell : Navigator {
+class Shell(private val audio: AudioPlayer? = null) : Navigator {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     var section by mutableStateOf(Section.HOME)
@@ -138,12 +142,26 @@ class Shell : Navigator {
             player = null
             return
         }
+        if (audio?.expanded == true) {
+            audio.expanded = false
+            return
+        }
         val stack = stacks.getValue(section)
         if (stack.size > 1) stack.removeAt(stack.lastIndex).dispose()
     }
 
     override fun play(request: PlayerRequest) {
-        player = request
+        // The audio player makes way, and hands its place on when it had the same thing
+        player = audio?.handOverTo(request) ?: request
+    }
+
+    override fun listen(request: PlayerRequest) {
+        if (audio == null) {
+            player = request
+            return
+        }
+        player = null
+        audio.play(request)
     }
 
     fun closePlayer() {
@@ -191,30 +209,36 @@ fun ShellContent(shell: Shell) {
                 }
         ) {
             val request = shell.player
+            val audio = LocalApp.current.audio
             if (request != null) {
                 PlayerScreen(request = request, onClose = shell::closePlayer)
             } else {
-                Row(modifier = Modifier.fillMaxSize()) {
-                    Sidebar(shell, available)
-                    Surface(
-                        color = MaterialTheme.colorScheme.background,
-                        modifier = Modifier.weight(1f).fillMaxHeight(),
-                    ) {
-                        val entry = shell.current
-                        AnimatedContent(
-                            targetState = entry,
-                            transitionSpec = { fadeIn() togetherWith fadeOut() },
-                            label = "page",
-                        ) { page ->
-                            CompositionLocalProvider(
-                                LocalPageEntry provides page,
-                                LocalCanGoBack provides (page === entry && shell.canGoBack),
-                            ) {
-                                PageContent(page.route)
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        Sidebar(shell, available)
+                        Surface(
+                            color = MaterialTheme.colorScheme.background,
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
+                        ) {
+                            val entry = shell.current
+                            AnimatedContent(
+                                targetState = entry,
+                                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                                label = "page",
+                            ) { page ->
+                                CompositionLocalProvider(
+                                    LocalPageEntry provides page,
+                                    LocalCanGoBack provides (page === entry && shell.canGoBack),
+                                ) {
+                                    PageContent(page.route)
+                                }
                             }
                         }
                     }
+                    // While something is loaded in it, the audio player's bar
+                    AudioBar(audio)
                 }
+                if (audio.expanded) AudioScreen(audio)
             }
             shell.overlay?.let { content -> Box(modifier = Modifier.fillMaxSize()) { content() } }
             SnackbarHost(

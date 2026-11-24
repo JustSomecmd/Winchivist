@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -246,37 +247,34 @@ class JrwiItemModel(
     fun play(fromStart: Boolean, navigator: Navigator) {
         val current = item ?: return
         if (playsAudio) {
-            navigator.play(PlayerRequest.Jrwi(current.id, audio = true, fromStart = fromStart))
+            // In the audio player, which leaves the page free to read on
+            navigator.listen(PlayerRequest.Jrwi(current.id, audio = true, fromStart = fromStart))
             return
         }
         val video = current.video ?: return
-        if (video.isYoutube) {
-            val youtubeId = video.youtubeId
-            if (youtubeId != null && app.api.isConfigured) {
-                navigator.play(PlayerRequest.Ta(videoId = youtubeId, fromStart = fromStart))
-            } else {
-                navigator.message(
-                    "This video is only on YouTube, so it plays from TubeArchivist, which " +
-                        "isn't set up."
-                )
-            }
+        if (video.isYoutube && !app.api.isConfigured) {
+            navigator.message(
+                "This video is only on YouTube, so it plays from TubeArchivist, which isn't set up."
+            )
             return
         }
         if (lookingUp) return
         lookingUp = true
         scope.launch {
             try {
-                val episodeId = repository.episodeId(current)
-                navigator.play(
-                    if (episodeId != null) {
-                        PlayerRequest.Jellyfin(episodeId.toString(), fromStart = fromStart)
-                    } else {
-                        PlayerRequest.Jrwi(current.id, audio = false, fromStart = fromStart)
-                    }
-                )
+                repository.videoRequest(current, fromStart)?.let(navigator::play)
             } finally {
                 lookingUp = false
             }
+        }
+    }
+
+    /** Reads where it was left again, a moment after the audio player let go of it. */
+    fun reloadProgress() {
+        val current = item ?: return
+        scope.launch {
+            delay(RETURN_DELAY_MS)
+            loadProgress(current)
         }
     }
 
@@ -723,13 +721,28 @@ private fun JrwiItemDetails(model: JrwiItemModel, item: JrwiItem) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        // While the audio player has this episode's audio, Play and the time left follow it
+        val live by
+            remember(item.id, playsAudio) {
+                derivedStateOf { if (playsAudio) app.audio.stateOf(item) else null }
+            }
+        var wasLive by remember { mutableStateOf(false) }
+        LaunchedEffect(live != null) {
+            if (live != null) {
+                wasLive = true
+            } else if (wasLive) {
+                wasLive = false
+                model.reloadProgress()
+            }
+        }
         val length =
             (if (playsAudio) item.audio?.duration else item.video?.duration) ?: item.duration
         val position = model.position.takeIf { !model.finished && it > 0 } ?: 0.0
         val left =
-            length
-                ?.takeIf { position > 0 && it > position }
-                ?.let { ceil((it - position) / 60).toInt() }
+            live?.minutesLeft
+                ?: length
+                    ?.takeIf { position > 0 && it > position }
+                    ?.let { ceil((it - position) / 60).toInt() }
         val download = app.jrwiDownloads.downloadOf(item, playsAudio)
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(Spacings.small),
@@ -739,12 +752,17 @@ private fun JrwiItemDetails(model: JrwiItemModel, item: JrwiItem) {
             JrwiPlayButton(
                 text =
                     when {
+                        live?.playing == true && left != null -> "Pause · $left min left"
+                        live?.playing == true -> "Pause"
                         left != null -> "Resume · $left min left"
-                        position > 0 -> "Resume"
+                        position > 0 || live != null -> "Resume"
                         else -> "Play"
                     },
                 busy = model.lookingUp,
-                onClick = { model.play(fromStart = false, navigator = navigator) },
+                onClick = {
+                    if (live != null) app.audio.togglePause()
+                    else model.play(fromStart = false, navigator = navigator)
+                },
             )
             if (position >= FROM_START_AFTER) {
                 JrwiSquareButton(

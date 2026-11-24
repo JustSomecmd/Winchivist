@@ -32,6 +32,19 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
      */
     var playerControlsOverVideo: Boolean by storedBoolean("player_controls_over_video", true)
 
+    /** How far the players' back and forward buttons go, in seconds. */
+    var seekBackSeconds: Int by storedInt("seek_back_seconds", 10)
+    var seekForwardSeconds: Int by storedInt("seek_forward_seconds", 10)
+
+    /** How fast the audio player plays, kept apart from the video player's speed. */
+    var audioSpeed: Double
+        get() = audioSpeedText.toDoubleOrNull()?.coerceIn(0.5, 3.0) ?: 1.0
+        set(value) {
+            audioSpeedText = value.toString()
+        }
+
+    private var audioSpeedText: String by stored<String>("audio_speed", "1.0")
+
     /** What to do at a SponsorBlock segment: button, auto or off. */
     var sponsorBlock: String by stored<String>("sponsorblock", SPONSORBLOCK_BUTTON)
 
@@ -108,6 +121,22 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
             ) {
                 if (value == null) prefs.remove(key) else prefs.put(key, value)
                 state.value = value
+            }
+        }
+
+    private fun storedInt(key: String, default: Int) =
+        object : kotlin.properties.ReadWriteProperty<Any?, Int> {
+            private var state by mutableStateOf(prefs.getInt(key, default))
+
+            override fun getValue(thisRef: Any?, property: kotlin.reflect.KProperty<*>): Int = state
+
+            override fun setValue(
+                thisRef: Any?,
+                property: kotlin.reflect.KProperty<*>,
+                value: Int,
+            ) {
+                prefs.putInt(key, value)
+                state = value
             }
         }
 

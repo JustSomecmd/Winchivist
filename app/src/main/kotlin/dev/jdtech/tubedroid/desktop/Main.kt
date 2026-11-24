@@ -19,6 +19,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import dev.jdtech.tubedroid.desktop.player.awaitPlaybackSaves
 import dev.jdtech.tubedroid.desktop.screens.SettingsScreen
 import dev.jdtech.tubedroid.desktop.ui.TubedroidTheme
 import dev.jdtech.tubedroid.desktop.ui.installImageLoader
@@ -36,10 +37,15 @@ fun main() {
 
     application {
         val windowState = rememberWindowState(width = 1360.dp, height = 860.dp)
-        val shell = remember { Shell() }
+        val shell = remember { Shell(graph.audio) }
         val icon = remember { windowIcon() }
         Window(
-            onCloseRequest = ::exitApplication,
+            onCloseRequest = {
+                // Where the sound got to is saved before the app goes
+                graph.audio.close()
+                awaitPlaybackSaves()
+                exitApplication()
+            },
             state = windowState,
             title = "Winchivist",
             icon = icon,

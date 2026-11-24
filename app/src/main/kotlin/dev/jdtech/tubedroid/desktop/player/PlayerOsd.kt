@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import dev.jdtech.tubedroid.desktop.LocalApp
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.Tooltip
@@ -92,11 +93,7 @@ import kotlinx.coroutines.delay
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun PlayerOsd(
-    session: PlayerSession,
-    onClose: () -> Unit,
-    onOpenPlaylistPage: () -> Unit,
-) {
+internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
     var lastMove by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var shown by remember { mutableStateOf(true) }
     var menus by remember { mutableIntStateOf(0) }
@@ -154,7 +151,7 @@ internal fun PlayerOsd(
         ) {
             OsdTop(
                 session = session,
-                onClose = onClose,
+                actions = actions,
                 modifier =
                     Modifier.hoverable(controlsHover)
                         .background(
@@ -203,7 +200,7 @@ internal fun PlayerOsd(
                 loop = session.loop,
                 onPlay = session::playFromPlaylist,
                 onLoopChange = session::changeLoop,
-                onOpenPage = onOpenPlaylistPage,
+                onOpenPage = actions.onOpenPlaylistPage,
                 modifier = Modifier.hoverable(controlsHover),
             )
         }
@@ -211,32 +208,52 @@ internal fun PlayerOsd(
 }
 
 /**
- * The top of the controls: back, the title, and the channel or show under it, smaller and in the
- * accent, then the playlist button when one plays.
+ * The top of the controls: back, the title, which opens the page of what plays, and the channel or
+ * show under it, smaller and in the accent. Then the buttons for a JRWI episode's transcript, for
+ * going on with the sound alone, and for the playlist when one plays.
  */
 @Composable
-internal fun OsdTop(session: PlayerSession, onClose: () -> Unit, modifier: Modifier = Modifier) {
+internal fun OsdTop(session: PlayerSession, actions: PlayerActions, modifier: Modifier = Modifier) {
     val item = session.item
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.fillMaxWidth()) {
-        OsdButton(icon = "ic_arrow_left", label = "Back", onClick = onClose)
+        OsdButton(icon = "ic_arrow_left", label = "Back", onClick = actions.onClose)
         Spacer(Modifier.width(Spacings.small))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item?.title.orEmpty(),
-                style = MaterialTheme.typography.titleLarge,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            item?.subtitle?.let { subtitle ->
+        // The title takes the room the buttons leave, and is clicked on its own words only
+        Box(modifier = Modifier.weight(1f)) {
+            Column(
+                modifier =
+                    Modifier.clip(RoundedCornerShape(6.dp))
+                        .clickable(enabled = item?.route != null, onClick = actions.onOpenPage)
+                        .padding(horizontal = 4.dp)
+            ) {
                 Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
+                    text = item?.title.orEmpty(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = Color.White,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                item?.subtitle?.let { subtitle ->
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
+        }
+        if (item?.transcriptPost != null) {
+            OsdButton(
+                icon = "ic_transcript",
+                label = if (session.transcriptOpen) "Close the transcript" else "Transcript",
+                onClick = session::toggleTranscript,
+                lit = session.transcriptOpen,
+            )
+        }
+        if (item != null) {
+            OsdButton(icon = "ic_headphones", label = "Sound only", onClick = actions.onSoundOnly)
         }
         if (session.hasPlaylist) {
             OsdButton(
@@ -260,6 +277,7 @@ internal fun OsdBottom(
     onMenu: (open: Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val settings = LocalApp.current.settings
     Column(modifier = modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TimeText(formatDuration(session.position))
@@ -293,8 +311,8 @@ internal fun OsdBottom(
             ) {
                 OsdButton(
                     icon = "ic_rewind",
-                    label = "10 seconds back",
-                    onClick = { session.seekBy(-10.0) },
+                    label = "${settings.seekBackSeconds} seconds back",
+                    onClick = session::seekBack,
                 )
                 OsdButton(
                     icon = if (session.paused) "ic_play" else "ic_pause",
@@ -304,8 +322,8 @@ internal fun OsdBottom(
                 )
                 OsdButton(
                     icon = "ic_fast_forward",
-                    label = "10 seconds forward",
-                    onClick = { session.seekBy(10.0) },
+                    label = "${settings.seekForwardSeconds} seconds forward",
+                    onClick = session::seekForward,
                 )
                 session.upNext?.let { next ->
                     OsdButton(
@@ -541,8 +559,9 @@ internal fun SeekBar(
     onSeek: (Double) -> Unit,
     modifier: Modifier = Modifier,
     trickplay: Trickplay? = null,
+    /** What's been played is drawn in this, or in the theme's accent when it isn't given. */
+    accent: Color = MaterialTheme.colorScheme.primary,
 ) {
-    val accent = MaterialTheme.colorScheme.primary
     var dragging by remember { mutableStateOf<Float?>(null) }
     var hoverX by remember { mutableStateOf<Float?>(null) }
     val hover = remember { MutableInteractionSource() }
@@ -679,8 +698,12 @@ private val TRICKPLAY_WIDTH = 200.dp
 
 /** A thin bar to set a level with, such as the volume. */
 @Composable
-internal fun ThinSlider(value: Float, onChange: (Float) -> Unit, modifier: Modifier = Modifier) {
-    val accent = MaterialTheme.colorScheme.primary
+internal fun ThinSlider(
+    value: Float,
+    onChange: (Float) -> Unit,
+    modifier: Modifier = Modifier,
+    accent: Color = MaterialTheme.colorScheme.primary,
+) {
     Box(
         modifier =
             modifier

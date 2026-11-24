@@ -1,85 +1,137 @@
 package dev.jdtech.tubedroid.desktop.player
 
 import dev.jdtech.jellyfin.jrwi.JrwiItem
+import dev.jdtech.tubedroid.desktop.AppGraph
+import dev.jdtech.tubedroid.desktop.Route
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiMatch
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiRepository
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * A JRWI episode played straight from the archive: its audio, or its archived video when Jellyfin
  * doesn't have it. Where it got to is kept in the archive, under the version's own post, and for
- * the audio it's handed on to the video's copy when it's paused or left.
+ * the audio it's handed on to the video's copy when it's paused or left. The audio goes on to the
+ * next episode of its show.
  */
 internal class JrwiPlaybackSource(
     private val repository: JrwiRepository,
     private val request: PlayerRequest.Jrwi,
 ) : PlaybackSource {
-    private var item: JrwiItem? = null
+    // Each thing played with its episode, as a save can come in after the next one has started
+    private val items = ConcurrentHashMap<String, JrwiItem>()
     private var lastSaved = 0L
 
+    // The episode after the one playing, looked up once: its ID, then what follows it, if anything
+    private var following: Pair<Long, JrwiItem?>? = null
+
     override suspend fun first(): PlayItem {
+        val item = repository.api.getItem(request.postId)
+        return play(item, fromStart = request.fromStart, startAt = request.startSeconds)
+    }
+
+    private suspend fun play(item: JrwiItem, fromStart: Boolean, startAt: Double?): PlayItem {
         val api = repository.api
-        val loaded = api.getItem(request.postId)
-        item = loaded
+        val audio = request.audio
         val address =
-            (if (request.audio) loaded.audio?.url else loaded.video?.url)
+            (if (audio) item.audio?.url else item.video?.url)
                 ?: error("The archive has no file for this version")
-        val saved = if (request.fromStart) null else repository.progress(loaded, request.audio)
+        val resume =
+            when {
+                startAt != null -> startAt.takeIf { it > 1 }
+                fromStart -> null
+                else ->
+                    repository
+                        .progress(item, audio)
+                        ?.takeIf { !it.finished && it.position > 5 }
+                        ?.position
+            }
+        val postId = (if (audio) item.audio?.postId else item.video?.postId) ?: item.id
+        val id = "jrwi:${item.id}:${if (audio) "audio" else "video"}"
+        items[id] = item
         return PlayItem(
-            id = "jrwi:${loaded.id}:${if (request.audio) "audio" else "video"}",
-            title = loaded.title,
-            subtitle = repository.showName(loaded.show),
+            id = id,
+            title = item.title,
+            subtitle = repository.showName(item.show),
             url = api.fileUrl(address) ?: error("The JRWI archiver isn't set up"),
             header = api.authHeader?.let { "Authorization: $it" },
-            resumeSeconds = saved?.takeIf { !it.finished && it.position > 5 }?.position,
+            resumeSeconds = resume,
+            picture = api.fileUrl(item.thumbnail),
+            route = Route.JrwiPost(postId),
+            jrwi = item,
+            jrwiAudio = audio,
+            transcriptPost = item.transcriptPost(audio),
         )
     }
 
-    override suspend fun nextTitle(current: PlayItem): String? = null
+    /**
+     * The episode after [current] in its show and tab, as the show's page lists it. Only the audio
+     * goes on, and only to an episode that has audio: it stops before one without.
+     */
+    private suspend fun nextEpisode(current: PlayItem): JrwiItem? {
+        if (!request.audio) return null
+        val item = items[current.id] ?: return null
+        following?.let { (id, next) -> if (id == item.id) return next }
+        val next = repository.nextInShow(item)?.takeIf { it.audio != null && !it.locked }
+        following = item.id to next
+        return next
+    }
 
-    override suspend fun next(current: PlayItem): PlayItem? = null
+    override suspend fun nextTitle(current: PlayItem): String? = nextEpisode(current)?.title
+
+    override suspend fun next(current: PlayItem): PlayItem? {
+        val next = nextEpisode(current) ?: return null
+        // From where it was left, or else from its start
+        return play(next, fromStart = false, startAt = null)
+    }
 
     override suspend fun progress(item: PlayItem, report: PlaybackReport) {
         val now = System.currentTimeMillis()
         if (!report.paused && now - lastSaved < JRWI_SAVE_INTERVAL_MS) return
         lastSaved = now
-        save(report, ended = false, handOff = report.paused)
+        save(item, report, ended = false, handOff = report.paused)
     }
 
     override suspend fun stopped(item: PlayItem, report: PlaybackReport) {
-        save(report, ended = false, handOff = true)
+        save(item, report, ended = false, handOff = true)
     }
 
     override suspend fun ended(item: PlayItem) {
-        save(PlaybackReport(seconds = 0.0, paused = true), ended = true, handOff = true)
+        save(item, PlaybackReport(seconds = 0.0, paused = true), ended = true, handOff = true)
     }
 
-    private suspend fun save(report: PlaybackReport, ended: Boolean, handOff: Boolean) {
-        val current = item ?: return
+    private suspend fun save(
+        play: PlayItem,
+        report: PlaybackReport,
+        ended: Boolean,
+        handOff: Boolean,
+    ) {
+        val item = items[play.id] ?: return
         if (request.audio) {
-            repository.audioPlayed(current, report.seconds, report.duration, ended, handOff)
+            repository.audioPlayed(item, report.seconds, report.duration, ended, handOff)
         } else {
-            repository.videoPlayed(current, report.seconds, report.duration, ended)
+            repository.videoPlayed(item, report.seconds, report.duration, ended)
         }
     }
 }
 
 /**
  * Keeps a JRWI episode's place in the archive as well while its video plays from Jellyfin or
- * TubeArchivist, wherever it was started from. [find] gives the archive's item of what plays, or
- * null when it isn't one of the archive's. The archive's position is the one it starts from, being
- * the newest, as every app and the web app save there.
+ * TubeArchivist, wherever it was started from. [find] gives what the archive has for what plays, or
+ * null when it isn't one of the archive's. With [resume], it starts from the archive's position,
+ * being the newest, as every app and the web app save there.
  */
 internal class JrwiLinkedSource(
     private val inner: PlaybackSource,
     private val repository: JrwiRepository,
-    private val fromStart: Boolean,
-    private val find: suspend (PlayItem) -> JrwiItem?,
+    private val resume: Boolean,
+    private val find: suspend (PlayItem) -> JrwiMatch?,
 ) : PlaybackSource by inner {
     private val items = ConcurrentHashMap<String, JrwiItem>()
     private var lastSaved = 0L
 
-    override suspend fun first(): PlayItem = link(inner.first(), resume = !fromStart)
+    override suspend fun first(): PlayItem = link(inner.first(), resume = resume)
 
     override suspend fun next(current: PlayItem): PlayItem? =
         inner.next(current)?.let { link(it, resume = false) }
@@ -88,7 +140,7 @@ internal class JrwiLinkedSource(
         inner.playlistItem(videoId)?.let { link(it, resume = true) }
 
     private suspend fun link(play: PlayItem, resume: Boolean): PlayItem {
-        val item =
+        val match =
             try {
                 find(play)
             } catch (e: CancellationException) {
@@ -96,13 +148,21 @@ internal class JrwiLinkedSource(
             } catch (_: Exception) {
                 null
             } ?: return play
+        // Only the lines, for a video whose place the archive doesn't keep
+        val item = match.item ?: return play.copy(transcriptPost = match.transcriptPost)
         items[play.id] = item
-        if (!resume) return play
-        val saved = repository.progress(item, audio = false) ?: return play
+        val linked =
+            play.copy(
+                jrwi = item,
+                transcriptPost = match.transcriptPost,
+                route = Route.JrwiPost(item.video?.postId ?: item.id),
+            )
+        if (!resume) return linked
+        val saved = repository.progress(item, audio = false) ?: return linked
         return if (!saved.finished && saved.position > 5) {
-            play.copy(resumeSeconds = saved.position)
+            linked.copy(resumeSeconds = saved.position)
         } else {
-            play
+            linked
         }
     }
 
@@ -130,6 +190,39 @@ internal class JrwiLinkedSource(
             repository.videoPlayed(item, report.seconds, report.duration, ended = false)
         // The archive decides when an episode counts as watched; the video's own copy follows
         if (nowWatched) repository.markVideoPlayed(item)
+    }
+}
+
+/**
+ * Where [request] plays from and reports back to, for either player. With the JRWI archive
+ * connected, an episode of its that plays from TubeArchivist or Jellyfin keeps its place in the
+ * archive too, and brings its transcript.
+ */
+internal fun playbackSource(app: AppGraph, request: PlayerRequest): PlaybackSource {
+    val linked = app.settings.isJrwiConfigured
+    val resume = !request.fromStart && request.startSeconds == null
+    return when (request) {
+        is PlayerRequest.Ta -> {
+            val plain = TaPlaybackSource(app.api, app.settings, app.history, request)
+            if (linked) {
+                JrwiLinkedSource(plain, app.jrwi, resume) { play -> app.jrwi.matchYoutube(play.id) }
+            } else {
+                plain
+            }
+        }
+        is PlayerRequest.Jellyfin -> {
+            val plain = JellyfinPlaybackSource(app.jellyfin, request)
+            if (linked) {
+                JrwiLinkedSource(plain, app.jrwi, resume) { play ->
+                    app.jrwi.itemForEpisode(UUID.fromString(play.id))?.let { item ->
+                        JrwiMatch(item, item.transcriptPost(audio = false))
+                    }
+                }
+            } else {
+                plain
+            }
+        }
+        is PlayerRequest.Jrwi -> JrwiPlaybackSource(app.jrwi, request)
     }
 }
 

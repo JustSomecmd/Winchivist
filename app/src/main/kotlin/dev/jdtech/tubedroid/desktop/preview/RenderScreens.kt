@@ -49,6 +49,7 @@ import dev.jdtech.tubedroid.desktop.jrwi.inspectFiles
 import dev.jdtech.tubedroid.desktop.jrwi.jrwiViewerItems
 import dev.jdtech.tubedroid.desktop.jrwi.showPictures
 import dev.jdtech.tubedroid.desktop.player.MpvLoader
+import dev.jdtech.tubedroid.desktop.player.PlayerActions
 import dev.jdtech.tubedroid.desktop.player.PlayerOsd
 import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 import dev.jdtech.tubedroid.desktop.player.PlayerSession
@@ -104,7 +105,7 @@ fun main(args: Array<String>) {
     }
 
     runBlocking(Dispatchers.Main) {
-        val shell = Shell()
+        val shell = Shell(graph.audio)
         val scene =
             ImageComposeScene(width = 1360, height = 860, density = Density(1f)) {
                 CompositionLocalProvider(
@@ -180,6 +181,20 @@ fun main(args: Array<String>) {
         shell.inspectFiles(listOf(SampleArchive.files[1]), 0)
         capture("jrwi-inspector")
         shell.closeOverlay()
+        // The audio player: its bar under the episode's page, the full player, and the transcript
+        shell.select(Section.JRWI_SHOWS)
+        shell.back()
+        graph.audio.showForPreview(
+            PlayerRequest.Jrwi(SampleArchive.episodes[1].id, audio = true),
+            position = 4_192.0,
+            duration = 11_395.0,
+        )
+        capture("audio-bar")
+        graph.audio.expanded = true
+        capture("audio-player")
+        graph.audio.session?.toggleTranscript()
+        capture("audio-transcript")
+        graph.audio.close()
         // The player, from a playlist, with its controls; without mpv the video's place is empty
         shell.play(
             PlayerRequest.Ta(
@@ -264,7 +279,7 @@ fun main(args: Array<String>) {
                                         )
                                     )
                         ) {
-                            PlayerOsd(session = osdSession, onClose = {}, onOpenPlaylistPage = {})
+                            PlayerOsd(session = osdSession, actions = PlayerActions(onClose = {}))
                         }
                     }
                 }

@@ -5,6 +5,7 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -34,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.WindowPlacement
 import com.sun.jna.Native
@@ -44,6 +46,7 @@ import dev.jdtech.tubedroid.desktop.LocalAppWindow
 import dev.jdtech.tubedroid.desktop.LocalNavigator
 import dev.jdtech.tubedroid.desktop.LocalWindowState
 import dev.jdtech.tubedroid.desktop.Route
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiTheme
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.TubedroidTheme
 import dev.jdtech.tubedroid.desktop.ui.errorText
@@ -62,10 +65,13 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** A SponsorBlock segment that can be skipped, in seconds. */
 internal data class SkipSegment(
@@ -80,6 +86,18 @@ internal data class SkipSegment(
 private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 /**
+ * Waits a moment for the saves that are under way, for when the app is closing and would otherwise
+ * take them with it.
+ */
+fun awaitPlaybackSaves() {
+    val saves = backgroundScope.coroutineContext[Job]?.children?.toList().orEmpty()
+    if (saves.isEmpty()) return
+    runBlocking { withTimeoutOrNull(CLOSING_WAIT_MS) { saves.forEach { it.join() } } }
+}
+
+private const val CLOSING_WAIT_MS = 2_000L
+
+/**
  * The video playing, mpv's state as last read, and what happens around it: saving progress where
  * the video came from, SponsorBlock, and going on to the next video or episode.
  */
@@ -87,6 +105,8 @@ internal class PlayerSession(
     private val source: PlaybackSource,
     private val settings: AppSettings,
     private val scope: CoroutineScope,
+    /** Plays the sound alone, in the audio player. */
+    val audio: Boolean = false,
 ) {
     var player by mutableStateOf<MpvPlayer?>(null)
     var item by mutableStateOf<PlayItem?>(null)
@@ -146,6 +166,7 @@ internal class PlayerSession(
             upNext != null &&
                 settings.autoplay &&
                 !upNextCancelled &&
+                sleep?.atEnd != true &&
                 duration > 0 &&
                 duration - position in 0.0..UP_NEXT_SECONDS
 
@@ -157,6 +178,70 @@ internal class PlayerSession(
     fun changeSpeed(value: Double) {
         speed = value
         player?.set("speed", value.toString())
+        // The audio player's speed is its own, and remembered
+        if (audio) settings.audioSpeed = value
+    }
+
+    /** A sleep timer: pausing at a time, or at the end of what plays. */
+    data class Sleep(val endsAt: Long? = null, val atEnd: Boolean = false)
+
+    var sleep by mutableStateOf<Sleep?>(null)
+        private set
+
+    // The volume a sleep timer's fade started from, to go back to once it has paused
+    private var fadeFrom: Double? = null
+
+    /** Pauses in [minutes] from now, the sound fading out over the last seconds. */
+    fun sleepIn(minutes: Int) {
+        endFade()
+        sleep = Sleep(endsAt = System.currentTimeMillis() + minutes * 60_000L)
+    }
+
+    /** Moves a running sleep timer by [minutes], which can be less than none. */
+    fun addSleep(minutes: Int) {
+        val endsAt = sleep?.endsAt ?: return
+        endFade()
+        val soonest = System.currentTimeMillis() + MIN_SLEEP_MS
+        sleep = Sleep(endsAt = (endsAt + minutes * 60_000L).coerceAtLeast(soonest))
+    }
+
+    /** Stops at the end of what plays, rather than going on to the next. */
+    fun sleepAtEnd() {
+        endFade()
+        sleep = Sleep(atEnd = true)
+    }
+
+    fun cancelSleep() {
+        endFade()
+        sleep = null
+    }
+
+    private fun checkSleep(player: MpvPlayer, now: Long) {
+        val endsAt = sleep?.endsAt ?: return
+        val left = endsAt - now
+        if (left <= 0) {
+            player.set("pause", "yes")
+            sleep = null
+            endFade()
+        } else if (left < SLEEP_FADE_MS && !paused) {
+            val from = fadeFrom ?: volume.also { fadeFrom = it }
+            player.set("volume", String.format(Locale.ROOT, "%.1f", from * left / SLEEP_FADE_MS))
+        }
+    }
+
+    /** Puts the volume back to what a sleep timer's fade started from. */
+    private fun endFade() {
+        val from = fadeFrom ?: return
+        fadeFrom = null
+        player?.set("volume", String.format(Locale.ROOT, "%.0f", from))
+    }
+
+    /** Whether the transcript's lines show, beside the video or in the picture's place. */
+    var transcriptOpen by mutableStateOf(false)
+        private set
+
+    fun toggleTranscript() {
+        transcriptOpen = !transcriptOpen && item?.transcriptPost != null
     }
 
     fun selectSubtitle(id: Int?) {
@@ -221,8 +306,23 @@ internal class PlayerSession(
     }
 
     fun togglePause() {
+        // Played again after a long pause, the sound goes back a little, to pick up the thread
+        val since = pausedAt
+        if (audio && paused && since != null) {
+            pausedAt = null
+            if (System.currentTimeMillis() - since >= REWIND_AFTER_PAUSE_MS) seekBy(-REWIND_SECONDS)
+        }
         player?.command("cycle", "pause")
     }
+
+    fun pause() {
+        player?.set("pause", "yes")
+    }
+
+    /** Back and forward by the steps in the settings. */
+    fun seekBack() = seekBy(-settings.seekBackSeconds.toDouble())
+
+    fun seekForward() = seekBy(settings.seekForwardSeconds.toDouble())
 
     fun seekTo(seconds: Double) {
         position = seconds
@@ -235,8 +335,10 @@ internal class PlayerSession(
 
     fun changeVolume(value: Double) {
         volume = value
-        player?.set("volume", String.format(Locale.ROOT, "%.0f", value))
         if (muted) player?.set("mute", "no")
+        // While a sleep timer fades the sound out, this is what it fades from
+        if (fadeFrom != null) fadeFrom = value
+        else player?.set("volume", String.format(Locale.ROOT, "%.0f", value))
     }
 
     fun toggleMute() {
@@ -362,6 +464,7 @@ internal class PlayerSession(
         private set
 
     private var skippedSegment: SkipSegment? = null
+    private var pausedAt: Long? = null
     private var lastReport = 0L
     private var lastReported = -1.0
     private var started: String? = null
@@ -393,6 +496,7 @@ internal class PlayerSession(
         chapters = emptyList()
         subtitleTracks = emptyList()
         audioTracks = emptyList()
+        if (item.transcriptPost == null) transcriptOpen = false
         position = item.resumeSeconds ?: 0.0
         lastReported = -1.0
         lastReport = System.currentTimeMillis()
@@ -460,7 +564,7 @@ internal class PlayerSession(
         val pausedBefore = paused
         paused = player.getFlag("pause")
         muted = player.getFlag("mute")
-        player.getDouble("volume")?.let { volume = it }
+        player.getDouble("volume")?.let { if (fadeFrom == null) volume = it }
         player.getDouble("speed")?.let { speed = it }
         subtitleId = player.get("sid")?.toIntOrNull()
         audioId = player.get("aid")?.toIntOrNull()
@@ -470,12 +574,21 @@ internal class PlayerSession(
         val now = System.currentTimeMillis()
         if (paused && !pausedBefore) {
             // Where it was paused is saved right away, rather than with the next regular save
+            pausedAt = now
             lastReport = now
             reportProgress(position, paused = true)
+        } else if (!paused && pausedBefore) {
+            // Played again from elsewhere, such as a media key, after a long pause
+            val since = pausedAt
+            pausedAt = null
+            if (audio && since != null && now - since >= REWIND_AFTER_PAUSE_MS) {
+                seekBy(-REWIND_SECONDS)
+            }
         } else if (!paused && now - lastReport > PROGRESS_INTERVAL_MS) {
             lastReport = now
             reportProgress(position, paused = false)
         }
+        checkSleep(player, now)
         val atEnd = player.getFlag("eof-reached")
         if (atEnd && !ended) {
             ended = true
@@ -523,6 +636,11 @@ internal class PlayerSession(
         val length = duration.takeIf { it > 0 } ?: position
         reportProgress(length, paused = true)
         backgroundScope.launch { runCatching { source.ended(current) } }
+        if (sleep?.atEnd == true) {
+            // The sleep timer was for the end of this one, so nothing follows it
+            sleep = null
+            return
+        }
         if (settings.autoplay && upNext != null && !upNextCancelled) {
             scope.launch {
                 delay(1500)
@@ -586,6 +704,16 @@ internal class PlayerSession(
         private const val PROGRESS_INTERVAL_MS = 10_000L
         val SPEEDS = listOf(0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0)
 
+        /** The audio player's speeds, which go further, as a podcast app's do. */
+        val AUDIO_SPEEDS = listOf(0.5, 0.75, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0)
+
+        // As the phone app's audio player: 5 seconds back after a minute or more paused, and a
+        // sleep timer that fades over its last 10 seconds and can't be moved to under a minute
+        private const val REWIND_AFTER_PAUSE_MS = 60_000L
+        private const val REWIND_SECONDS = 5.0
+        private const val SLEEP_FADE_MS = 10_000L
+        private const val MIN_SLEEP_MS = 60_000L
+
         /** How long before the end the Up next card shows, in seconds. */
         private const val UP_NEXT_SECONDS = 20.0
 
@@ -620,36 +748,7 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
     val appWindow = LocalAppWindow.current
     val scope = rememberCoroutineScope()
     val session =
-        remember(request) {
-            // With the JRWI archive connected, an episode of its that plays from TubeArchivist or
-            // Jellyfin keeps its place in the archive too
-            val linked = app.settings.isJrwiConfigured
-            val source =
-                when (request) {
-                    is PlayerRequest.Ta -> {
-                        val plain = TaPlaybackSource(app.api, app.settings, app.history, request)
-                        if (linked) {
-                            JrwiLinkedSource(plain, app.jrwi, request.fromStart) { play ->
-                                app.jrwi.itemForYoutube(play.id)
-                            }
-                        } else {
-                            plain
-                        }
-                    }
-                    is PlayerRequest.Jellyfin -> {
-                        val plain = JellyfinPlaybackSource(app.jellyfin, request)
-                        if (linked) {
-                            JrwiLinkedSource(plain, app.jrwi, request.fromStart) { play ->
-                                app.jrwi.itemForEpisode(java.util.UUID.fromString(play.id))
-                            }
-                        } else {
-                            plain
-                        }
-                    }
-                    is PlayerRequest.Jrwi -> JrwiPlaybackSource(app.jrwi, request)
-                }
-            PlayerSession(source, app.settings, scope)
-        }
+        remember(request) { PlayerSession(playbackSource(app, request), app.settings, scope) }
     val close by rememberUpdatedState(onClose)
     val lib = remember { MpvLoader.load() }
     var placementBefore by remember { mutableStateOf(windowState.placement) }
@@ -694,11 +793,27 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
         onDispose { focusManager?.removeKeyEventDispatcher(keys) }
     }
 
-    val openPlaylistPage = {
-        val playlistId = (request as? PlayerRequest.Ta)?.playlistId
-        close()
-        if (playlistId != null) navigator.open(Route.Playlist(playlistId))
-    }
+    val actions =
+        PlayerActions(
+            onClose = { close() },
+            onOpenPlaylistPage = {
+                val playlistId = (request as? PlayerRequest.Ta)?.playlistId
+                close()
+                if (playlistId != null) navigator.open(Route.Playlist(playlistId))
+            },
+            // The page of what plays, which can be a later video than the one asked for
+            onOpenPage = {
+                val route = session.item?.route
+                close()
+                if (route != null) navigator.open(route)
+            },
+            // The sound goes on in the audio player, from the same moment
+            onSoundOnly = {
+                val sound = soundRequest(session, request)
+                close()
+                if (sound != null) navigator.listen(sound)
+            },
+        )
     val video: @Composable () -> Unit = {
         MpvVideo(lib = lib, session = session, settings = app.settings, onShutdown = { close() })
     }
@@ -708,36 +823,103 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
             appWindow != null &&
             lib != null &&
             !GraphicsEnvironment.isHeadless()
-    if (overlay) {
-        var videoBounds by remember { mutableStateOf<Rect?>(null) }
-        Box(
-            modifier =
-                Modifier.fillMaxSize().background(Color.Black).onGloballyPositioned {
-                    videoBounds = it.boundsInWindow()
-                }
-        ) {
-            video()
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // Beside the video, which moves over and stays whole
+        val transcriptWidth = minOf(maxWidth * TRANSCRIPT_SHARE, TRANSCRIPT_MAX_WIDTH)
+        val transcript: @Composable () -> Unit = {
+            PlayerTranscript(session = session, width = transcriptWidth)
         }
-        OverlayWindow(owner = appWindow!!, bounds = videoBounds) {
-            CompositionLocalProvider(LocalApp provides app) {
-                TubedroidTheme(accent = app.settings.accent) {
-                    PlayerOsd(
-                        session = session,
-                        onClose = { close() },
-                        onOpenPlaylistPage = openPlaylistPage,
-                    )
+        if (overlay) {
+            var videoBounds by remember { mutableStateOf<Rect?>(null) }
+            Row(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier =
+                        Modifier.weight(1f).fillMaxHeight().onGloballyPositioned {
+                            videoBounds = it.boundsInWindow()
+                        }
+                ) {
+                    video()
+                }
+                transcript()
+            }
+            OverlayWindow(owner = appWindow!!, bounds = videoBounds) {
+                CompositionLocalProvider(LocalApp provides app) {
+                    TubedroidTheme(accent = app.settings.accent) {
+                        PlayerOsd(session = session, actions = actions)
+                    }
                 }
             }
+        } else {
+            PlayerWithBars(
+                session = session,
+                actions = actions,
+                video = video,
+                transcript = transcript,
+            )
         }
-    } else {
-        PlayerWithBars(
-            session = session,
-            onClose = { close() },
-            onOpenPlaylistPage = openPlaylistPage,
-            video = video,
-        )
     }
 }
+
+/** What the player's controls can do beyond the video itself. */
+internal class PlayerActions(
+    val onClose: () -> Unit,
+    val onOpenPlaylistPage: () -> Unit = {},
+    val onOpenPage: () -> Unit = {},
+    val onSoundOnly: () -> Unit = {},
+)
+
+/**
+ * What the audio player plays to go on with [session]'s sound from the same moment. A JRWI episode
+ * with an audio version goes on in that, at the matching moment; anything else in its own sound.
+ */
+internal fun soundRequest(session: PlayerSession, request: PlayerRequest): PlayerRequest? {
+    val item = session.item ?: return null
+    val seconds = session.position
+    val episode = item.jrwi
+    val audio = episode?.audio
+    if (episode != null && audio != null && !item.jrwiAudio) {
+        return PlayerRequest.Jrwi(
+            postId = audio.postId,
+            audio = true,
+            startSeconds = episode.audioSeconds(seconds),
+        )
+    }
+    // What plays now, which in a playlist or a show can be a later one than was asked for
+    return when (request) {
+        is PlayerRequest.Ta -> PlayerRequest.Ta(item.id, request.playlistId, startSeconds = seconds)
+        is PlayerRequest.Jellyfin -> PlayerRequest.Jellyfin(item.id, startSeconds = seconds)
+        is PlayerRequest.Jrwi -> request.startingAt(seconds)
+    }
+}
+
+/**
+ * The transcript of a JRWI episode beside its video, in the archive's colours, following what
+ * plays. Clicking a line plays from it.
+ */
+@Composable
+private fun PlayerTranscript(session: PlayerSession, width: Dp) {
+    val postId = session.item?.transcriptPost
+    AnimatedVisibility(
+        visible = session.transcriptOpen && postId != null,
+        enter = expandHorizontally(expandFrom = Alignment.Start),
+        exit = shrinkHorizontally(shrinkTowards = Alignment.Start),
+    ) {
+        if (postId != null) {
+            JrwiTheme {
+                TranscriptPanel(
+                    postId = postId,
+                    position = { session.position },
+                    onSeek = session::seekTo,
+                    onClose = session::toggleTranscript,
+                    modifier = Modifier.width(width).fillMaxHeight(),
+                )
+            }
+        }
+    }
+}
+
+private const val TRANSCRIPT_SHARE = 0.4f
+private val TRANSCRIPT_MAX_WIDTH = 420.dp
 
 /**
  * The controls above and below the video rather than over it, for when the window over the video
@@ -746,15 +928,15 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
 @Composable
 private fun PlayerWithBars(
     session: PlayerSession,
-    onClose: () -> Unit,
-    onOpenPlaylistPage: () -> Unit,
+    actions: PlayerActions,
     video: @Composable () -> Unit,
+    transcript: @Composable () -> Unit,
 ) {
     val bars = MaterialTheme.colorScheme.surfaceContainerLowest
     Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         OsdTop(
             session = session,
-            onClose = onClose,
+            actions = actions,
             modifier = Modifier.background(bars).padding(horizontal = 12.dp, vertical = 6.dp),
         )
         Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -776,9 +958,10 @@ private fun PlayerWithBars(
                     loop = session.loop,
                     onPlay = session::playFromPlaylist,
                     onLoopChange = session::changeLoop,
-                    onOpenPage = onOpenPlaylistPage,
+                    onOpenPage = actions.onOpenPlaylistPage,
                 )
             }
+            transcript()
         }
         Column(horizontalAlignment = Alignment.End, modifier = Modifier.background(bars)) {
             OsdExtras(session = session, modifier = Modifier.padding(top = 8.dp, end = 20.dp))
@@ -920,6 +1103,8 @@ private fun mpvOptions(settings: AppSettings): List<Pair<String, String>> = buil
     add("hwdec" to settings.hardwareDecoding)
     add("osd-font-size" to "38")
     add("cursor-autohide" to "1000")
+    // Windows' media controls and the keyboard's media keys, which mpv leaves off inside an app
+    add("media-controls" to "yes")
 }
 
 /** The native window mpv draws into. Starts mpv once it exists and stops it before it goes. */

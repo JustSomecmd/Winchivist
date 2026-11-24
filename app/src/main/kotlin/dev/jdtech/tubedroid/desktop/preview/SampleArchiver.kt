@@ -39,6 +39,8 @@ import dev.jdtech.jellyfin.jrwi.JrwiStatus
 import dev.jdtech.jellyfin.jrwi.JrwiSync
 import dev.jdtech.jellyfin.jrwi.JrwiTab
 import dev.jdtech.jellyfin.jrwi.JrwiTagCount
+import dev.jdtech.jellyfin.jrwi.JrwiTranscript
+import dev.jdtech.jellyfin.jrwi.JrwiTranscriptLine
 import dev.jdtech.jellyfin.jrwi.JrwiVideo
 import java.awt.Color
 import java.awt.GradientPaint
@@ -92,6 +94,37 @@ internal object SampleArchive {
                 itemCount = 41,
                 latest = "2026-10-30T00:00:00+00:00",
             ),
+        )
+
+    // A made-up scene, for the transcript's lines
+    private val turns =
+        listOf(
+            "Game master" to
+                "The harbour is loud this morning. A woman with a ledger is shouting at two dock " +
+                    "hands about a crate that's gone missing.",
+            "Marlow" to "Is the crate ours?",
+            "Game master" to "It might be. Roll perception.",
+            null to "[dice rolling]",
+            "Marlow" to "That's a four.",
+            "Tess" to "I'm going to stand very still and hope nobody asks me anything.",
+            null to "[laughter]",
+            "Quill" to
+                "While they're busy I'd like to walk up to the harbour master, as if I'm meant " +
+                    "to be here, and ask what the crate was worth.",
+            "Game master" to "She looks you up and down. \"More than your boat.\"",
+        )
+
+    /** A stretch of a timed transcript, a line every few seconds from a little over an hour in. */
+    fun transcript(postId: Long): JrwiTranscript =
+        JrwiTranscript(
+            postId = postId,
+            aligned = true,
+            lines =
+                (0 until 72).map { index ->
+                    val (speaker, text) = turns[index % turns.size]
+                    val start = 3_900.0 + index * 9.0
+                    JrwiTranscriptLine(start, start + 8.0, speaker, text)
+                },
         )
 
     private val titles =
@@ -160,6 +193,7 @@ internal object SampleArchive {
                 commentCount = 12 + index,
                 likeCount = 469 - index * 11,
                 archived = true,
+                transcript = true,
                 bodyHtml =
                     "<p>The crew sails into the storm, and <strong>nothing</strong> goes to plan.</p>" +
                         "<h3>In this episode</h3><ul><li>A deal with the harbour master</li>" +
@@ -601,6 +635,11 @@ internal class SampleArchiver {
                                 ?: everything.first())
                             .let { json.encodeToString(JrwiItem.serializer(), it) }
                 }
+            "transcript" ->
+                json.encodeToString(
+                    JrwiTranscript.serializer(),
+                    SampleArchive.transcript(id ?: 0),
+                )
             "progress" ->
                 json.encodeToString(
                     JrwiProgress.serializer(),

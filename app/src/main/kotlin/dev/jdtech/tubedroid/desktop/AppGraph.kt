@@ -7,11 +7,12 @@ import dev.jdtech.jellyfin.tubearchivist.TaApi
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinClient
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiDownloader
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiRepository
+import dev.jdtech.tubedroid.desktop.player.AudioPlayer
 import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 
 /**
  * What the pages share: the settings, TubeArchivist, Jellyfin, the JRWI archive, the downloads to
- * this computer and the check for a newer Winchivist.
+ * this computer, the audio player and the check for a newer Winchivist.
  */
 class AppGraph(val settings: AppSettings) {
     val api = TaApi(settings)
@@ -21,6 +22,7 @@ class AppGraph(val settings: AppSettings) {
     val updates = Updates()
     val history = WatchHistory(settings, store = { jellyfin.playlistSessionStore })
     val jrwiDownloads = JrwiDownloader(this)
+    val audio = AudioPlayer(this)
 }
 
 val LocalApp = staticCompositionLocalOf<AppGraph> { error("No app") }
@@ -32,6 +34,9 @@ interface Navigator {
     fun back()
 
     fun play(request: PlayerRequest)
+
+    /** Plays [request]'s sound in the audio player, which leaves the pages free to use. */
+    fun listen(request: PlayerRequest)
 
     /** Goes to one of the sidebar's sections. */
     fun select(section: Section)

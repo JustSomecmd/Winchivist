@@ -403,9 +403,24 @@ private fun DownloadSettings(settings: AppSettings) {
 private fun PlaybackSettings(settings: AppSettings) {
     SwitchRow(
         title = "Autoplay",
-        subtitle = "Plays the next video of a playlist when one ends",
+        subtitle = "Plays the next video of a playlist, or the next episode, when one ends",
         checked = settings.autoplay,
         onChange = { settings.autoplay = it },
+    )
+    val steps = SEEK_STEPS.map { it.toString() to "$it s" }
+    ChoiceRow(
+        title = "Back button",
+        subtitle = "How far the players' back button goes",
+        options = steps,
+        selected = settings.seekBackSeconds.toString(),
+        onSelect = { settings.seekBackSeconds = it.toInt() },
+    )
+    ChoiceRow(
+        title = "Forward button",
+        subtitle = "How far the players' forward button goes",
+        options = steps,
+        selected = settings.seekForwardSeconds.toString(),
+        onSelect = { settings.seekForwardSeconds = it.toInt() },
     )
     SwitchRow(
         title = "Controls over the video",
@@ -446,6 +461,9 @@ private fun PlaybackSettings(settings: AppSettings) {
         TextButton(onClick = { openFolder(settings.mpvConfigFolder) }) { Text("Open folder") }
     }
 }
+
+// As the phone app offers for its players' seek buttons
+private val SEEK_STEPS = listOf(5, 10, 15, 30, 60)
 
 @Composable
 private fun SwitchRow(

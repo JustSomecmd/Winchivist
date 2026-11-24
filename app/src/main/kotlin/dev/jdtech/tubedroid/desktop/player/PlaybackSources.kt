@@ -1,15 +1,18 @@
 package dev.jdtech.tubedroid.desktop.player
 
+import dev.jdtech.jellyfin.jrwi.JrwiItem
 import dev.jdtech.jellyfin.tubearchivist.TaApi
 import dev.jdtech.jellyfin.tubearchivist.TaVideo
 import dev.jdtech.jellyfin.tubearchivist.loadPlaylist
 import dev.jdtech.tubedroid.desktop.AppSettings
+import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.WatchHistory
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinClient
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
+import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.MediaSegmentType
 import org.jellyfin.sdk.model.api.MediaStreamType
 
@@ -21,15 +24,26 @@ sealed interface PlayerRequest {
     /** Starts at the beginning even when it was watched part of the way. */
     val fromStart: Boolean
 
+    /**
+     * Starts at this moment whatever was saved, such as when the sound is handed over to the video
+     * or the other way round.
+     */
+    val startSeconds: Double?
+
     /** A TubeArchivist video, and the playlist it's played from, if any. */
     data class Ta(
         val videoId: String,
         val playlistId: String? = null,
         override val fromStart: Boolean = false,
+        override val startSeconds: Double? = null,
     ) : PlayerRequest
 
     /** A movie or episode on Jellyfin. Episodes go on to the next one. */
-    data class Jellyfin(val itemId: String, override val fromStart: Boolean = false) : PlayerRequest
+    data class Jellyfin(
+        val itemId: String,
+        override val fromStart: Boolean = false,
+        override val startSeconds: Double? = null,
+    ) : PlayerRequest
 
     /**
      * A JRWI episode straight from the archive, by any of its posts' IDs: its audio, or with
@@ -39,7 +53,16 @@ sealed interface PlayerRequest {
         val postId: Long,
         val audio: Boolean,
         override val fromStart: Boolean = false,
+        override val startSeconds: Double? = null,
     ) : PlayerRequest
+
+    /** The same, from [seconds] in. */
+    fun startingAt(seconds: Double): PlayerRequest =
+        when (this) {
+            is Ta -> copy(fromStart = false, startSeconds = seconds)
+            is Jellyfin -> copy(fromStart = false, startSeconds = seconds)
+            is Jrwi -> copy(fromStart = false, startSeconds = seconds)
+        }
 }
 
 /** A subtitle file next to the video, which mpv adds as a track. */
@@ -62,6 +85,15 @@ internal data class PlayItem(
     /** The subtitle track to start with, as mpv numbers them; 0 is none, null leaves it to mpv. */
     val subtitleTrack: Int? = null,
     val trickplay: Trickplay? = null,
+    /** A picture of it, for the audio player. */
+    val picture: String? = null,
+    /** The page of what plays. */
+    val route: Route? = null,
+    /** The JRWI archive's episode this is, when it's one, and whether it's that one's audio. */
+    val jrwi: JrwiItem? = null,
+    val jrwiAudio: Boolean = false,
+    /** The post whose transcript follows what plays, timed in its timeline, or null. */
+    val transcriptPost: Long? = null,
 )
 
 /**
@@ -176,7 +208,9 @@ internal class TaPlaybackSource(
                     playlist = videos
                 }
         }
-        return video.toPlayItem(fromStart = request.fromStart)
+        val item = video.toPlayItem(fromStart = request.fromStart)
+        val startAt = request.startSeconds ?: return item
+        return item.copy(resumeSeconds = startAt.takeIf { it > 1 })
     }
 
     /** Notes the video as played, and the playlist as being at it, for Continue watching. */
@@ -251,6 +285,8 @@ internal class TaPlaybackSource(
             segments =
                 if (settings.sponsorBlock == AppSettings.SPONSORBLOCK_OFF) emptyList()
                 else skipSegments(),
+            picture = api.mediaUrl(thumbUrl),
+            route = Route.Video(youtubeId, request.playlistId),
         )
     }
 
@@ -294,7 +330,7 @@ internal class JellyfinPlaybackSource(
 
     override suspend fun first(): PlayItem {
         val item = client.item(UUID.fromString(request.itemId))
-        return item.toPlayItem(fromStart = request.fromStart)
+        return item.toPlayItem(fromStart = request.fromStart, startAt = request.startSeconds)
     }
 
     /** The episode after this one in the show, across seasons. */
@@ -350,10 +386,15 @@ internal class JellyfinPlaybackSource(
         )
     }
 
-    private suspend fun BaseItemDto.toPlayItem(fromStart: Boolean): PlayItem {
+    private suspend fun BaseItemDto.toPlayItem(
+        fromStart: Boolean,
+        startAt: Double? = null,
+    ): PlayItem {
         items[id.toString()] = this
         val position = JellyfinClient.seconds(userData?.playbackPositionTicks)
-        val resume = position.takeIf { !fromStart && it > 5 }
+        val resume =
+            if (startAt != null) startAt.takeIf { it > 1 }
+            else position.takeIf { !fromStart && it > 5 }
         val info = client.playbackInfo(id, resume)
         val source = info.mediaSources.firstOrNull() ?: error("Jellyfin has no file for this")
         val sourceId = source.id ?: id.toString().replace("-", "")
@@ -401,8 +442,15 @@ internal class JellyfinPlaybackSource(
                     else -> subtitleIndexes.indexOf(index).takeIf { it >= 0 }?.plus(1)
                 },
             trickplay = trickplay(sourceId),
+            picture = picture(),
+            route = Route.JellyfinItem(id.toString()),
         )
     }
+
+    /** The item's own picture, or its show's for an episode without one. */
+    private fun BaseItemDto.picture(): String? =
+        client.imageUrl(id, ImageType.PRIMARY, imageTags?.get(ImageType.PRIMARY), PICTURE_WIDTH)
+            ?: seriesId?.let { client.imageUrl(it, ImageType.PRIMARY, seriesPrimaryImageTag, 600) }
 
     /** Intros, credits and the like that Jellyfin knows of, to skip with a button. */
     private suspend fun BaseItemDto.skipSegments(): List<SkipSegment> =
@@ -446,6 +494,8 @@ internal class JellyfinPlaybackSource(
         }
     }
 }
+
+private const val PICTURE_WIDTH = 800
 
 /** Such as "S2:E5 · The Long Night". */
 internal fun episodeTitle(item: BaseItemDto): String {
