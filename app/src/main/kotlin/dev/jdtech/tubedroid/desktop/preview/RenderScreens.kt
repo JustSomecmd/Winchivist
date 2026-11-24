@@ -67,8 +67,10 @@ import dev.jdtech.tubedroid.desktop.player.SettingsPage
 import dev.jdtech.tubedroid.desktop.player.TaPlaybackSource
 import dev.jdtech.tubedroid.desktop.screens.ChannelModel
 import dev.jdtech.tubedroid.desktop.screens.SearchModel
+import dev.jdtech.tubedroid.desktop.screens.SettingsGroup
 import dev.jdtech.tubedroid.desktop.screens.SettingsScreen
 import dev.jdtech.tubedroid.desktop.screens.VideoModel
+import dev.jdtech.tubedroid.desktop.screens.settingsGroup
 import dev.jdtech.tubedroid.desktop.ui.TubedroidTheme
 import dev.jdtech.tubedroid.desktop.ui.installImageLoader
 import java.awt.Color
@@ -168,6 +170,11 @@ fun main(args: Array<String>) {
         capture("queue")
         shell.select(Section.SETTINGS)
         capture("settings")
+        for (group in SettingsGroup.entries.drop(1)) {
+            settingsGroup = group
+            capture("settings-${group.name.lowercase()}")
+        }
+        settingsGroup = SettingsGroup.SERVERS
         shell.open(Route.TaSettings)
         capture("ta-settings")
         shell.back()

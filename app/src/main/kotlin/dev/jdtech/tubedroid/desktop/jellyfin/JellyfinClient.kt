@@ -238,6 +238,54 @@ class JellyfinClient(private val settings: AppSettings) {
             result.items to result.totalRecordCount
         }
 
+    /** The movies and episodes the server added last, newest first, without pictures. */
+    suspend fun newest(limit: Int): List<BaseItemDto> =
+        withContext(Dispatchers.IO) {
+            api.libraryApi
+                .getItems(
+                    userId,
+                    includeItemTypes = PLAYED_KINDS,
+                    recursive = true,
+                    sortBy = listOf(ItemSortBy.DATE_CREATED),
+                    sortOrder = listOf(SortOrder.DESCENDING),
+                    limit = limit,
+                    enableImages = false,
+                    enableUserData = false,
+                )
+                .content
+                .items
+        }
+
+    /** The ID of every movie and episode on the server, read a page at a time. */
+    suspend fun allIds(): Set<String> =
+        withContext(Dispatchers.IO) {
+            val ids = HashSet<String>()
+            var start = 0
+            while (start < MAX_IDS) {
+                val page =
+                    api.libraryApi
+                        .getItems(
+                            userId,
+                            includeItemTypes = PLAYED_KINDS,
+                            recursive = true,
+                            // Oldest first, so what's added while it reads goes at the end
+                            sortBy = listOf(ItemSortBy.DATE_CREATED),
+                            sortOrder = listOf(SortOrder.ASCENDING),
+                            startIndex = start,
+                            limit = IDS_PAGE,
+                            enableImages = false,
+                            enableUserData = false,
+                            enableTotalRecordCount = false,
+                        )
+                        .content
+                        .items
+                page.forEach { ids += it.id.toString() }
+                if (page.size < IDS_PAGE) break
+                start += IDS_PAGE
+            }
+            ids
+        }
+
     /** A few movies and shows Jellyfin suggests. */
     suspend fun suggestions(): List<BaseItemDto> =
         withContext(Dispatchers.IO) {
@@ -590,6 +638,9 @@ class JellyfinClient(private val settings: AppSettings) {
 
     companion object {
         private val FILE_FIELDS = listOf(ItemFields.PROVIDER_IDS, ItemFields.PATH)
+        private val PLAYED_KINDS = listOf(BaseItemKind.EPISODE, BaseItemKind.MOVIE)
+        private const val IDS_PAGE = 1000
+        private const val MAX_IDS = 200_000
 
         // Higher than any file, so Jellyfin never asks for a smaller copy
         private const val MAX_BITRATE = 1_000_000_000

@@ -57,6 +57,26 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
     /** mpv's hardware decoding, as its hwdec option. */
     var hardwareDecoding: String by stored<String>("hwdec", "auto-safe")
 
+    /** A Windows notification when a movie or an episode is new on Jellyfin. */
+    var notifyNewItems: Boolean by storedBoolean("notify_new_items", true)
+
+    /** A Windows notification when YouTube's bot detection stops a TubeArchivist task. */
+    var notifyBots: Boolean by storedBoolean("notify_bots", true)
+
+    /** Whether closing the window leaves Winchivist running in the system tray. */
+    var keepInTray: Boolean by storedBoolean("keep_in_tray", false)
+
+    /** Whether Windows starts Winchivist, in the tray, when the user signs in. */
+    var startWithWindows: Boolean by storedBoolean("start_with_windows", false)
+
+    /** How much room the pictures kept on disk may take, in megabytes. Read when the app starts. */
+    var imageCacheMb: Int by storedInt("image_cache_mb", 512)
+
+    // What the bot detection check has seen: for which server, since when, and which failures
+    var botCheckedServer: String? by stored<String?>("bot_checked_server", null)
+    var botCheckedSince: String? by stored<String?>("bot_checked_since", null)
+    var botSeen: String? by stored<String?>("bot_seen", null)
+
     /** The accent preset, by the same names as the phone app. */
     var accent: String by stored<String>("accent", "tubearchivist")
 

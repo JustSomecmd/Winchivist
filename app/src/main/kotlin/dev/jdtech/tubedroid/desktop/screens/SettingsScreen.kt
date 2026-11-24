@@ -33,7 +33,9 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,19 +53,38 @@ import dev.jdtech.tubedroid.desktop.AppSettings
 import dev.jdtech.tubedroid.desktop.LocalApp
 import dev.jdtech.tubedroid.desktop.LocalNavigator
 import dev.jdtech.tubedroid.desktop.Route
+import dev.jdtech.tubedroid.desktop.StartWithWindows
 import dev.jdtech.tubedroid.desktop.jrwi.jrwiErrorText
 import dev.jdtech.tubedroid.desktop.player.StreamQuality
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
 import dev.jdtech.tubedroid.desktop.ui.ColumnScrollbar
+import dev.jdtech.tubedroid.desktop.ui.HeaderTabs
 import dev.jdtech.tubedroid.desktop.ui.PageBar
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.WinchivistLogo
 import dev.jdtech.tubedroid.desktop.ui.accentSeeds
+import dev.jdtech.tubedroid.desktop.ui.clearImageCache
 import dev.jdtech.tubedroid.desktop.ui.errorText
+import dev.jdtech.tubedroid.desktop.ui.formatSize
+import dev.jdtech.tubedroid.desktop.ui.imageCacheSize
 import java.io.File
 import javax.swing.JFileChooser
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** The settings in groups, each a tab at the top of the page. */
+internal enum class SettingsGroup(val label: String) {
+    SERVERS("Servers"),
+    PLAYBACK("Playback"),
+    NOTIFICATIONS("Notifications"),
+    FILES("Files"),
+    APP("App"),
+}
+
+/** The group that shows, kept while the app runs so that coming back to Settings finds it. */
+internal var settingsGroup by mutableStateOf(SettingsGroup.SERVERS)
 
 /**
  * The app's settings. On the first start it only asks for TubeArchivist's address and token, since
@@ -102,51 +123,85 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit, onSkip: (() -> Unit)? 
                 }
             }
         } else {
-            val scroll = rememberScrollState()
             Column(modifier = Modifier.fillMaxSize()) {
                 PageBar(title = "Settings", onBack = null)
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Column(
-                        verticalArrangement = Arrangement.spacedBy(Spacings.default),
-                        modifier =
-                            Modifier.verticalScroll(scroll)
-                                .padding(Spacings.default)
-                                .widthIn(max = 760.dp)
-                                .fillMaxWidth(),
-                    ) {
-                        SettingsSection("TubeArchivist") {
-                            ServerForm(settings = settings, onSaved = onDone)
-                            if (settings.isConfigured) {
-                                // Kept on TubeArchivist's server, so on a page of their own
-                                val navigator = LocalNavigator.current
-                                TextButton(onClick = { navigator.open(Route.TaSettings) }) {
-                                    Text("TubeArchivist's own settings and schedules")
+                HeaderTabs(
+                    tabs = SettingsGroup.entries.map { it.label },
+                    selected = settingsGroup.ordinal,
+                    onSelect = { settingsGroup = SettingsGroup.entries[it] },
+                    modifier = Modifier.padding(horizontal = Spacings.small),
+                )
+                // Each group scrolls by itself, from its top
+                key(settingsGroup) {
+                    val scroll = rememberScrollState()
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Column(
+                            verticalArrangement = Arrangement.spacedBy(Spacings.default),
+                            modifier =
+                                Modifier.verticalScroll(scroll)
+                                    .padding(Spacings.default)
+                                    .widthIn(max = 760.dp)
+                                    .fillMaxWidth(),
+                        ) {
+                            when (settingsGroup) {
+                                SettingsGroup.SERVERS -> ServerGroup(settings, onDone)
+                                SettingsGroup.PLAYBACK -> {
+                                    SettingsSection("Player") { PlaybackSettings(settings) }
+                                    SettingsSection("Skipping") { SkipSettings(settings) }
+                                    SettingsSection("mpv") { MpvSettings(settings) }
+                                }
+                                SettingsGroup.NOTIFICATIONS -> {
+                                    SettingsSection("Notifications") {
+                                        NotificationSettings(settings)
+                                    }
+                                    SettingsSection("In the background") {
+                                        BackgroundSettings(settings)
+                                    }
+                                }
+                                SettingsGroup.FILES -> {
+                                    SettingsSection("Downloads") { DownloadSettings(settings) }
+                                    SettingsSection("Pictures") { ImageSettings(settings) }
+                                }
+                                SettingsGroup.APP -> {
+                                    SettingsSection("Appearance") { AccentPicker(settings) }
+                                    SettingsSection("About") {
+                                        Text(
+                                            text = "Winchivist ${appVersion()}",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        Text(
+                                            text = "Video playback by mpv (libmpv).",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                        UpdateCheck()
+                                    }
                                 }
                             }
                         }
-                        SettingsSection("JRWI archiver") { JrwiForm(settings) }
-                        SettingsSection("Jellyfin") { JellyfinForm() }
-                        SettingsSection("Downloads") { DownloadSettings(settings) }
-                        SettingsSection("Playback") { PlaybackSettings(settings) }
-                        SettingsSection("Appearance") { AccentPicker(settings) }
-                        SettingsSection("About") {
-                            Text(
-                                text = "Winchivist ${appVersion()}",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            Text(
-                                text = "Video playback by mpv (libmpv).",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            UpdateCheck()
-                        }
+                        ColumnScrollbar(scroll)
                     }
-                    ColumnScrollbar(scroll)
                 }
             }
         }
     }
+}
+
+/** The three servers Winchivist reads from, each set up by itself. */
+@Composable
+private fun ServerGroup(settings: AppSettings, onDone: () -> Unit) {
+    SettingsSection("TubeArchivist") {
+        ServerForm(settings = settings, onSaved = onDone)
+        if (settings.isConfigured) {
+            // Kept on TubeArchivist's server, so on a page of their own
+            val navigator = LocalNavigator.current
+            TextButton(onClick = { navigator.open(Route.TaSettings) }) {
+                Text("TubeArchivist's own settings and schedules")
+            }
+        }
+    }
+    SettingsSection("JRWI archiver") { JrwiForm(settings) }
+    SettingsSection("Jellyfin") { JellyfinForm() }
 }
 
 @Composable
@@ -441,6 +496,26 @@ private fun PlaybackSettings(settings: AppSettings) {
         onChange = { settings.playerControlsOverVideo = it },
     )
     ChoiceRow(
+        title = "Streaming quality",
+        subtitle =
+            "For Jellyfin. Below Original, Jellyfin converts the video, which suits a slow " +
+                "connection. It can be changed while a video plays, too",
+        options = StreamQuality.entries.map { it.key to it.label },
+        selected = settings.streamQuality,
+        onSelect = { settings.streamQuality = it },
+    )
+    ChoiceRow(
+        title = "Hardware decoding",
+        subtitle = "Turn it off if videos show green frames or stutter",
+        options = listOf("auto-safe" to "On", "auto-copy-safe" to "Compatible", "no" to "Off"),
+        selected = settings.hardwareDecoding,
+        onSelect = { settings.hardwareDecoding = it },
+    )
+}
+
+@Composable
+private fun SkipSettings(settings: AppSettings) {
+    ChoiceRow(
         title = "SponsorBlock",
         subtitle = "For videos TubeArchivist has SponsorBlock segments for",
         options =
@@ -464,34 +539,142 @@ private fun PlaybackSettings(settings: AppSettings) {
         selected = settings.mediaSegments,
         onSelect = { settings.mediaSegments = it },
     )
-    ChoiceRow(
-        title = "Streaming quality",
-        subtitle =
-            "For Jellyfin. Below Original, Jellyfin converts the video, which suits a slow " +
-                "connection. It can be changed while a video plays, too",
-        options = StreamQuality.entries.map { it.key to it.label },
-        selected = settings.streamQuality,
-        onSelect = { settings.streamQuality = it },
+}
+
+@Composable
+private fun MpvSettings(settings: AppSettings) {
+    Text(
+        text =
+            "The player is mpv. An mpv.conf, an input.conf or scripts in its folder change it " +
+                "further, as with Jellyfin Media Player.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    ChoiceRow(
-        title = "Hardware decoding",
-        subtitle = "Turn it off if videos show green frames or stutter",
-        options = listOf("auto-safe" to "On", "auto-copy-safe" to "Compatible", "no" to "Off"),
-        selected = settings.hardwareDecoding,
-        onSelect = { settings.hardwareDecoding = it },
-    )
-    Column {
-        Text("mpv settings", style = MaterialTheme.typography.bodyLarge)
+    Row(verticalAlignment = Alignment.CenterVertically) {
         Text(
-            text =
-                "The player is mpv. Put an mpv.conf, input.conf or scripts in ${settings.mpvConfigFolder.path} " +
-                    "to change it further, as with Jellyfin Media Player.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            text = settings.mpvConfigFolder.path,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f),
         )
-        TextButton(onClick = { openFolder(settings.mpvConfigFolder) }) { Text("Open folder") }
+        TextButton(onClick = { openFolder(settings.mpvConfigFolder) }) { Text("Open") }
     }
 }
+
+/** What Winchivist looks for by itself every 15 minutes, and tells as a Windows notification. */
+@Composable
+private fun NotificationSettings(settings: AppSettings) {
+    val jellyfin = LocalApp.current.jellyfin.isSignedIn
+    Text(
+        text =
+            "Winchivist looks every 15 minutes while it runs and tells what it finds as a " +
+                "Windows notification. Its icon shows in the tray for that.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    SwitchRow(
+        title = "New on Jellyfin",
+        subtitle =
+            if (jellyfin) "Movies and episodes the Jellyfin server didn't have before"
+            else "Needs Jellyfin, which is under Servers",
+        checked = settings.notifyNewItems && jellyfin,
+        onChange = { settings.notifyNewItems = it },
+        enabled = jellyfin,
+    )
+    SwitchRow(
+        title = "YouTube's bot detection",
+        subtitle =
+            if (settings.isConfigured) {
+                "When it stops one of TubeArchivist's downloads or rescans. Needs the token of " +
+                    "a TubeArchivist admin"
+            } else {
+                "Needs TubeArchivist, which is under Servers"
+            },
+        checked = settings.notifyBots && settings.isConfigured,
+        onChange = { settings.notifyBots = it },
+        enabled = settings.isConfigured,
+    )
+}
+
+/** Staying in the tray and starting with Windows, both off until switched on here. */
+@Composable
+private fun BackgroundSettings(settings: AppSettings) {
+    val scope = rememberCoroutineScope()
+    var refused by remember { mutableStateOf(false) }
+    fun startWithWindows(on: Boolean) {
+        scope.launch {
+            val done = withContext(Dispatchers.IO) { StartWithWindows.set(on) }
+            refused = !done
+            if (done) settings.startWithWindows = on
+        }
+    }
+    SwitchRow(
+        title = "Keep running in the tray",
+        subtitle =
+            "Closing the window leaves Winchivist in the tray, where it keeps looking and " +
+                "keeps playing sound. Quit is in the menu of its tray icon",
+        checked = settings.keepInTray,
+        onChange = { on ->
+            settings.keepInTray = on
+            // Started by Windows it has no window, so it needs the tray
+            if (!on && settings.startWithWindows) startWithWindows(false)
+        },
+    )
+    SwitchRow(
+        title = "Start with Windows",
+        subtitle =
+            when {
+                !StartWithWindows.available -> "Only for a Winchivist that was installed"
+                refused -> "Windows didn't take the change"
+                !settings.keepInTray -> "Needs Keep running in the tray"
+                else -> "Starts in the tray when you sign in to Windows, without a window"
+            },
+        checked = settings.startWithWindows,
+        onChange = ::startWithWindows,
+        enabled = StartWithWindows.available && (settings.keepInTray || settings.startWithWindows),
+    )
+}
+
+/** How much room the pictures kept on this PC may take, and throwing them away. */
+@Composable
+private fun ImageSettings(settings: AppSettings) {
+    val scope = rememberCoroutineScope()
+    var used by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(Unit) { used = withContext(Dispatchers.IO) { imageCacheSize() } }
+    ChoiceRow(
+        title = "Room for pictures",
+        subtitle =
+            "Thumbnails and posters are kept on this PC so pages open quickly. A new size " +
+                "counts from the next time Winchivist starts",
+        options =
+            IMAGE_CACHE_SIZES.map { size ->
+                size.toString() to if (size < 1024) "$size MB" else "${size / 1024} GB"
+            },
+        selected = settings.imageCacheMb.toString(),
+        onSelect = { settings.imageCacheMb = it.toInt() },
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = used?.let { "${formatSize(it, metric = true)} in use" }.orEmpty(),
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f),
+        )
+        OutlinedButton(
+            onClick = {
+                scope.launch {
+                    used =
+                        withContext(Dispatchers.IO) {
+                            clearImageCache()
+                            imageCacheSize()
+                        }
+                }
+            }
+        ) {
+            Text("Clear")
+        }
+    }
+}
+
+private val IMAGE_CACHE_SIZES = listOf(128, 256, 512, 1024, 2048)
 
 // As the phone app offers for its players' seek buttons
 private val SEEK_STEPS = listOf(5, 10, 15, 30, 60)
@@ -502,23 +685,31 @@ private fun SwitchRow(
     subtitle: String,
     checked: Boolean,
     onChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier =
-            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable {
+            Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable(enabled = enabled) {
                 onChange(!checked)
             },
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color =
+                    if (enabled) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+            )
             Text(
                 subtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        Switch(checked = checked, onCheckedChange = onChange)
+        Spacer(Modifier.width(Spacings.default))
+        Switch(checked = checked, onCheckedChange = onChange, enabled = enabled)
     }
 }
 

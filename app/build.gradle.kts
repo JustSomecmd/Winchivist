@@ -33,9 +33,15 @@ dependencies {
 // The version of the installer, from the build number on GitHub
 val desktopVersion = providers.gradleProperty("desktopVersion").orElse("1.1.0")
 
+// Gives memory the app no longer uses back to Windows, which counts most while it waits in the
+// tray: a smaller share of the heap is kept free, and a check runs every two minutes it's idle
+val memoryArgs =
+    listOf("-XX:MinHeapFreeRatio=10", "-XX:MaxHeapFreeRatio=30", "-XX:G1PeriodicGCInterval=120000")
+
 compose.desktop {
     application {
         mainClass = "dev.jdtech.tubedroid.desktop.MainKt"
+        jvmArgs += memoryArgs
 
         nativeDistributions {
             targetFormats(TargetFormat.Msi)
@@ -69,5 +75,7 @@ tasks.register<JavaExec>("renderScreens") {
     val output = layout.buildDirectory.dir("screens")
     args(output.get().asFile.absolutePath)
     jvmArgs("-Djava.awt.headless=true")
+    // The same memory settings as the app, so one this Java doesn't know fails here, not on a PC
+    jvmArgs(memoryArgs)
     javaLauncher = javaToolchains.launcherFor { languageVersion = Versions.JAVA }
 }
