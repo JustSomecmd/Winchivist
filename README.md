@@ -8,7 +8,8 @@ desktop app uses.
 - Download videos and playlists on the server, and follow the download queue
 - Watch with Jellyfin-style controls over the video: chapters, subtitle and audio tracks, speed, skip buttons for
   SponsorBlock segments and Jellyfin's intros and credits, and Jellyfin's preview pictures on the seek bar
-- Pick up where you left off, and carry on with playlists where you stopped, also when you stopped on the phone
+- Pick up where you left off, and carry on with playlists where you stopped, also when you stopped on the phone:
+  what was played last comes first, on whichever device that was
 - Jellyfin's movies and shows, played straight from the server's files, with its libraries, collections, playlists,
   favourites and search
 - A JRWI archive, when a [JRWI archiver](https://github.com/JustSomecmd/jrwi-archiver) is set up: its feed, shows and
@@ -17,7 +18,8 @@ desktop app uses.
 - Windows notifications when Jellyfin adds a movie or an episode and when YouTube's bot detection stops a
   TubeArchivist task. Two switches, off at first, keep Winchivist in the tray and start it with Windows
 - A compute box: this PC can hear episodes for the JRWI archiver's timed transcripts, by running the archiver's own
-  `jrwi_hear.py` with a Python on the PC that has faster-whisper
+  `jrwi_hear.py` with a Python on the PC that has faster-whisper. The program is fetched from the archiver whenever
+  its version changes
 
 ## Install and update
 
@@ -42,7 +44,8 @@ To run it yourself, you need JDK 17. On Windows, download an mpv-dev-x86_64 buil
 
 The `tubearchivist` and `jrwi` modules are the same as Tubedroid's, so both apps talk to TubeArchivist and the JRWI
 archiver the same way. Changes to them are made in both repositories. `app/src/main/resources/hear/jrwi_hear.py` is a
-copy of the JRWI archiver's PC program (`jrwi/pc/jrwi_hear.py` there), to be replaced when that one changes.
+copy of the JRWI archiver's PC program (`jrwi/pc/jrwi_hear.py` there), for an archiver older than 0.14.10; a newer one
+hands out its own copy, which Winchivist fetches and runs in its place.
 
 ## License
 

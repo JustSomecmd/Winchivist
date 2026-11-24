@@ -442,10 +442,12 @@ class ComputeBox(private val app: AppGraph) {
         var used = false
         var claimedBy: String? = null
         var failure: String? = null
-        fun say(text: String) {
+        // Once it's downloading or hearing, the events say how far it is, and what it would have
+        // printed besides is only kept for when it stops on an error
+        var underWay = false
+        fun keep(text: String) {
             last.addLast(text)
             while (last.size > LINES_KEPT) last.removeFirst()
-            show(text)
         }
         val arguments =
             listOf("compare", job.itemId.toString(), "--models", model) +
@@ -454,12 +456,19 @@ class ComputeBox(private val app: AppGraph) {
             try {
                 program(arguments) { event, line ->
                     if (event == null) {
-                        // Not an event: something Python or one of its libraries wrote
-                        say(line)
+                        // Not an event: something Python or one of its libraries wrote, such as
+                        // how far a speech model's download is
+                        keep(line)
+                        show(line)
                     } else {
-                        when (event.text("event")) {
+                        val name = event.text("event")
+                        if (name in PROGRESS_EVENTS) underWay = true
+                        when (name) {
                             "message" -> {
-                                event.text("text")?.let(::say)
+                                event.text("text")?.let { text ->
+                                    keep(text)
+                                    if (!underWay) show(text)
+                                }
                             }
                             "claim" -> {
                                 event.text("claim")?.let { claim = Claim(job.itemId, it) }
@@ -1094,6 +1103,7 @@ class ComputeBox(private val app: AppGraph) {
         // The program's exit code when someone else is hearing every episode it was given
         private const val CLAIMED_ELSEWHERE = 3
         private const val ANOTHER = "another computer"
+        private val PROGRESS_EVENTS = setOf("copying", "download", "loading", "hearing")
         private const val NO_PYTHON =
             "No Python was found on this PC. The program needs Python 3.13 with faster-whisper: " +
                 "install Python from python.org, then run\n" +
