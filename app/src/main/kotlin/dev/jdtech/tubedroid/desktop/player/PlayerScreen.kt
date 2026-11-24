@@ -507,6 +507,8 @@ internal class PlayerSession(
             item.resumeSeconds?.let { String.format(Locale.ROOT, "%.1f", it) } ?: "none",
         )
         player.set("force-media-title", item.title)
+        // mpv pauses at the end of what it played last, and would stay paused for this one
+        player.set("pause", "no")
         // One header as it is, commas and all, rather than a list split at the commas
         player.command("change-list", "http-header-fields", "clr", "")
         item.header?.let { player.command("change-list", "http-header-fields", "append", it) }
@@ -1008,8 +1010,8 @@ private fun MpvVideo(
                                             is MpvEvent.LoadFailed ->
                                                 session.onLoadFailed(event.message)
                                             MpvEvent.Shutdown -> onShutdown()
-                                            // Only the audio player asks to be told
-                                            MpvEvent.AudioDevicesChanged -> {}
+                                            // What only the audio player asks to be told
+                                            else -> {}
                                         }
                                     }
                                 },

@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import dev.jdtech.jellyfin.jrwi.JrwiItem
 import dev.jdtech.tubedroid.desktop.AppGraph
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,8 +37,11 @@ class AudioPlayer(private val app: AppGraph) {
     private var request: PlayerRequest? = null
     private var running: CoroutineScope? = null
 
-    // The sound devices when it last looked, to notice the one in use going away
+    // The sound devices when it last looked, when one of them went away, and when the sound output
+    // was last opened again: both at once means the device in use went away
     private var devices: Set<String> = emptySet()
+    private var deviceGoneAt = 0L
+    private var outputChangedAt = 0L
 
     /** Whether the full player shows, rather than only the bar. */
     var expanded by mutableStateOf(false)
@@ -79,8 +83,10 @@ class AudioPlayer(private val app: AppGraph) {
                     scope.launch { onEvent(session, event) }
                 }
             session.player = player
-            player.watchAudioDevices()
+            deviceGoneAt = 0L
+            outputChangedAt = 0L
             devices = player.audioDevices()
+            player.watchAudioDevices()
         } catch (e: Exception) {
             session.loading = false
             session.error = e.message ?: e.toString()
@@ -121,16 +127,31 @@ class AudioPlayer(private val app: AppGraph) {
             is MpvEvent.LoadFailed -> session.onLoadFailed(event.message)
             MpvEvent.Shutdown -> close()
             MpvEvent.AudioDevicesChanged -> {
-                // Headphones unplugged or switched off: it doesn't carry on from the speakers
                 val now = session.player?.audioDevices() ?: return
-                val gone = devices.any { it !in now }
+                if (devices.any { it !in now }) deviceGoneAt = System.currentTimeMillis()
                 devices = now
-                if (gone && !session.paused) {
-                    session.pause()
-                    tick()
-                }
+                pauseIfUnplugged(session)
+            }
+            MpvEvent.AudioOutputChanged -> {
+                outputChangedAt = System.currentTimeMillis()
+                pauseIfUnplugged(session)
             }
         }
+    }
+
+    /**
+     * Pauses when the device the sound was on went away, such as headphones unplugged or switched
+     * off, rather than carrying on from the speakers. A device going away while the output stays as
+     * it is was another device, such as a screen's speakers when the screen goes to sleep.
+     */
+    private fun pauseIfUnplugged(session: PlayerSession) {
+        if (deviceGoneAt == 0L || outputChangedAt == 0L) return
+        if (abs(deviceGoneAt - outputChangedAt) > UNPLUGGED_WITHIN_MS) return
+        deviceGoneAt = 0L
+        outputChangedAt = 0L
+        if (session.paused || session.loading) return
+        session.pause()
+        tick()
     }
 
     /** Whether [request] asks for what's loaded now. */
@@ -288,6 +309,7 @@ class AudioPlayer(private val app: AppGraph) {
 
     private companion object {
         const val TICK_MS = 250L
+        const val UNPLUGGED_WITHIN_MS = 3_000L
         const val PAUSED_TICK_MS = 1_000L
     }
 }

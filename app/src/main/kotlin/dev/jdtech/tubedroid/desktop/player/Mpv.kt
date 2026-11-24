@@ -95,6 +95,9 @@ internal sealed interface MpvEvent {
 
     /** A sound device was plugged in or taken away. Only told when asked for. */
     data object AudioDevicesChanged : MpvEvent
+
+    /** The sound output was opened again, such as on another device. Only told when asked for. */
+    data object AudioOutputChanged : MpvEvent
 }
 
 /**
@@ -148,10 +151,14 @@ private constructor(
         lib.mpv_terminate_destroy(handle)
     }
 
-    /** Asks to be told, with [MpvEvent.AudioDevicesChanged], when the sound devices change. */
+    /**
+     * Asks to be told when the sound devices change ([MpvEvent.AudioDevicesChanged]) and when the
+     * sound output is opened again ([MpvEvent.AudioOutputChanged]).
+     */
     fun watchAudioDevices() {
         if (destroyed) return
         lib.mpv_observe_property(handle, AUDIO_DEVICES, "audio-device-list", FORMAT_NONE)
+        lib.mpv_observe_property(handle, AUDIO_OUTPUT, "current-ao", FORMAT_NONE)
     }
 
     /** The names of the sound devices there are now, as mpv knows them. */
@@ -171,7 +178,10 @@ private constructor(
                 }
                 EVENT_FILE_LOADED -> onEvent(MpvEvent.FileLoaded)
                 EVENT_PROPERTY_CHANGE ->
-                    if (event.getLong(8) == AUDIO_DEVICES) onEvent(MpvEvent.AudioDevicesChanged)
+                    when (event.getLong(8)) {
+                        AUDIO_DEVICES -> onEvent(MpvEvent.AudioDevicesChanged)
+                        AUDIO_OUTPUT -> onEvent(MpvEvent.AudioOutputChanged)
+                    }
                 EVENT_END_FILE -> {
                     val data = event.getPointer(16) ?: continue
                     if (data.getInt(0) == END_FILE_REASON_ERROR) {
@@ -192,8 +202,9 @@ private constructor(
         private const val END_FILE_REASON_ERROR = 4
         private const val FORMAT_NONE = 0
 
-        // What a change of the sound devices comes back marked with
+        // What a change of the sound devices, and of the sound output, come back marked with
         private const val AUDIO_DEVICES = 1L
+        private const val AUDIO_OUTPUT = 2L
 
         /**
          * Starts mpv inside the native window [wid], or with no window when it's null, with
