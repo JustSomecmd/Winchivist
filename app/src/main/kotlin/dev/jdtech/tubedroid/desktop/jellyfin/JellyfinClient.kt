@@ -16,6 +16,7 @@ import org.jellyfin.sdk.api.client.extensions.mediaInfoApi
 import org.jellyfin.sdk.api.client.extensions.mediaSegmentApi
 import org.jellyfin.sdk.api.client.extensions.sessionApi
 import org.jellyfin.sdk.api.client.extensions.showApi
+import org.jellyfin.sdk.api.client.extensions.suggestionApi
 import org.jellyfin.sdk.api.client.extensions.userDataApi
 import org.jellyfin.sdk.api.client.extensions.userViewApi
 import org.jellyfin.sdk.createJellyfin
@@ -31,6 +32,7 @@ import org.jellyfin.sdk.model.api.DlnaProfileType
 import org.jellyfin.sdk.model.api.EncodingContext
 import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.ItemFields
+import org.jellyfin.sdk.model.api.ItemFilter
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.jellyfin.sdk.model.api.MediaStream
@@ -194,6 +196,67 @@ class JellyfinClient(private val settings: AppSettings) {
                     .content
             result.items to result.totalRecordCount
         }
+
+    /**
+     * Which of Jellyfin's items a list holds: of some kinds, inside a library, collection or
+     * playlist, the favourites, what a search finds, or what someone is in. A playlist keeps its
+     * own order; the rest go by name.
+     */
+    data class ItemQuery(
+        val kinds: List<BaseItemKind>? = null,
+        val parentId: UUID? = null,
+        val favorites: Boolean = false,
+        val search: String? = null,
+        val personId: UUID? = null,
+        val recursive: Boolean = true,
+        val byName: Boolean = true,
+    )
+
+    /** One page of what [query] asks for, with how many there are in all. */
+    suspend fun query(
+        query: ItemQuery,
+        startIndex: Int,
+        limit: Int,
+    ): Pair<List<BaseItemDto>, Int> =
+        withContext(Dispatchers.IO) {
+            val result =
+                api.libraryApi
+                    .getItems(
+                        userId,
+                        parentId = query.parentId,
+                        includeItemTypes = query.kinds,
+                        recursive = query.recursive,
+                        filters = if (query.favorites) listOf(ItemFilter.IS_FAVORITE) else null,
+                        searchTerm = query.search,
+                        personIds = query.personId?.let { listOf(it) },
+                        sortBy = if (query.byName) listOf(ItemSortBy.SORT_NAME) else null,
+                        sortOrder = if (query.byName) listOf(SortOrder.ASCENDING) else null,
+                        startIndex = startIndex,
+                        limit = limit,
+                    )
+                    .content
+            result.items to result.totalRecordCount
+        }
+
+    /** A few movies and shows Jellyfin suggests. */
+    suspend fun suggestions(): List<BaseItemDto> =
+        withContext(Dispatchers.IO) {
+            api.suggestionApi
+                .getSuggestions(
+                    userId,
+                    limit = 12,
+                    type = listOf(BaseItemKind.MOVIE, BaseItemKind.SERIES),
+                )
+                .content
+                .items
+        }
+
+    suspend fun setFavorite(id: UUID, favorite: Boolean) {
+        withContext(Dispatchers.IO) {
+            if (favorite) api.userDataApi.markFavoriteItem(id)
+            else api.userDataApi.unmarkFavoriteItem(id)
+        }
+    }
 
     suspend fun item(id: UUID): BaseItemDto =
         withContext(Dispatchers.IO) { api.libraryApi.getItem(itemId = id, userId = userId).content }
@@ -510,6 +573,13 @@ class JellyfinClient(private val settings: AppSettings) {
             "Authorization: MediaBrowser Client=\"Winchivist\", Device=\"${computerName()}\", " +
                 "DeviceId=\"${settings.deviceId}\", Version=\"${appVersion()}\", " +
                 "Token=\"${settings.jellyfinToken}\""
+
+    /** What signs a request in, as the Authorization header's value. */
+    val authValue: String
+        get() = authHeader.removePrefix("Authorization: ")
+
+    /** The file of a movie or an episode as it is on the server, to save to this computer. */
+    fun downloadUrl(id: UUID): String = "${settings.jellyfinUrl}/Items/$id/Download"
 
     /** A picture of an item, such as its poster, sized for the page. */
     fun imageUrl(itemId: UUID, type: ImageType, tag: String?, maxWidth: Int): String? {

@@ -36,6 +36,7 @@ import dev.jdtech.tubedroid.desktop.LocalApp
 import dev.jdtech.tubedroid.desktop.LocalCanGoBack
 import dev.jdtech.tubedroid.desktop.LocalNavigator
 import dev.jdtech.tubedroid.desktop.Route
+import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinSearch
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiColors
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiSearch
 import dev.jdtech.tubedroid.desktop.rememberPageModel
@@ -101,6 +102,7 @@ class SearchModel(private val api: TaApi, private val scope: CoroutineScope) {
 enum class SearchService(val label: String) {
     TUBEARCHIVIST("TubeArchivist"),
     JRWI("JRWI"),
+    JELLYFIN("Jellyfin"),
 }
 
 /** Which server the search page looks in, kept while the page is in the history. */
@@ -120,6 +122,7 @@ fun SearchScreen(start: SearchService?, show: String? = null, tag: String? = nul
     val services = buildList {
         if (app.settings.isConfigured) add(SearchService.TUBEARCHIVIST)
         if (app.settings.isJrwiConfigured) add(SearchService.JRWI)
+        if (app.jellyfin.isSignedIn) add(SearchService.JELLYFIN)
     }
     val page =
         rememberPageModel("search-service") {
@@ -140,6 +143,7 @@ fun SearchScreen(start: SearchService?, show: String? = null, tag: String? = nul
     when (service) {
         SearchService.TUBEARCHIVIST -> TaSearch(bar)
         SearchService.JRWI -> JrwiSearch(bar = bar, show = show, tag = tag)
+        SearchService.JELLYFIN -> JellyfinSearch(bar)
     }
 }
 

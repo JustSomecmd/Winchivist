@@ -51,9 +51,14 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinFavoritesScreen
+import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinFolderScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinHomeScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinItemScreen
+import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinLibrariesScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinLibraryScreen
+import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinPersonScreen
+import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinPlaylistsScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinShowScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiArchiverScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiHomeScreen
@@ -269,7 +274,7 @@ private fun availableSections(shell: Shell): List<Section> {
             RailGroup.END ->
                 when (section) {
                     Section.DOWNLOADS -> downloads
-                    Section.SEARCH -> tubeArchivist || jrwi
+                    Section.SEARCH -> tubeArchivist || jrwi || jellyfin
                     else -> true
                 }
         }
@@ -519,6 +524,11 @@ private fun PageContent(route: Route) {
         is Route.Playlist -> PlaylistScreen(route.playlistId)
         is Route.JellyfinItem -> JellyfinItemScreen(route.itemId)
         is Route.JellyfinShow -> JellyfinShowScreen(route.seriesId)
+        Route.JellyfinLibraries -> JellyfinLibrariesScreen()
+        Route.JellyfinFavorites -> JellyfinFavoritesScreen()
+        Route.JellyfinPlaylists -> JellyfinPlaylistsScreen()
+        is Route.JellyfinFolder -> JellyfinFolderScreen(route)
+        is Route.JellyfinPerson -> JellyfinPersonScreen(route)
         Route.JrwiHome -> JrwiHomeScreen()
         Route.JrwiShows -> JrwiShowsScreen()
         Route.JrwiArchiver -> JrwiArchiverScreen()

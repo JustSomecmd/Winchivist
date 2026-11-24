@@ -44,6 +44,27 @@ sealed interface Route {
     /** A show on Jellyfin, with its seasons. */
     data class JellyfinShow(val seriesId: String) : Route
 
+    /** Jellyfin's libraries, each opening what it holds. */
+    data object JellyfinLibraries : Route
+
+    data object JellyfinFavorites : Route
+
+    data object JellyfinPlaylists : Route
+
+    /**
+     * What a library, a collection, a playlist or a folder on Jellyfin holds. [collection] is the
+     * kind of a library, as Jellyfin names it, such as movies; [ordered] keeps a playlist's order.
+     */
+    data class JellyfinFolder(
+        val id: String,
+        val title: String,
+        val collection: String? = null,
+        val ordered: Boolean = false,
+    ) : Route
+
+    /** What someone is in, on Jellyfin. */
+    data class JellyfinPerson(val id: String, val name: String) : Route
+
     /** The JRWI archive's feed, with what was started and not finished. */
     data object JrwiHome : Route
 
@@ -92,6 +113,9 @@ enum class Section(val root: Route, val label: String, val icon: String, val gro
     JELLYFIN(Route.JellyfinHome, "Home", "ic_home", RailGroup.JELLYFIN),
     MOVIES(Route.JellyfinMovies, "Movies", "ic_film", RailGroup.JELLYFIN),
     SHOWS(Route.JellyfinShows, "Shows", "ic_tv", RailGroup.JELLYFIN),
+    LIBRARIES(Route.JellyfinLibraries, "Libraries", "ic_library", RailGroup.JELLYFIN),
+    FAVORITES(Route.JellyfinFavorites, "Favourites", "ic_heart", RailGroup.JELLYFIN),
+    JELLYFIN_PLAYLISTS(Route.JellyfinPlaylists, "Playlists", "ic_list_video", RailGroup.JELLYFIN),
     DOWNLOADS(Route.Downloads, "Saved to this PC", "ic_download", RailGroup.END),
     SEARCH(Route.Search, "Search", "ic_search", RailGroup.END),
     SETTINGS(Route.Settings, "Settings", "ic_settings", RailGroup.END),

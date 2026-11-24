@@ -47,6 +47,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import dev.jdtech.tubedroid.desktop.AppGraph
+import dev.jdtech.tubedroid.desktop.Downloads
 import dev.jdtech.tubedroid.desktop.LocalApp
 import dev.jdtech.tubedroid.desktop.LocalCanGoBack
 import dev.jdtech.tubedroid.desktop.LocalNavigator
@@ -73,6 +75,7 @@ import dev.jdtech.tubedroid.desktop.ui.SectionRow
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.errorText
 import dev.jdtech.tubedroid.desktop.ui.formatDuration
+import java.io.File
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -116,6 +119,10 @@ class JellyfinHomeModel(private val client: JellyfinClient, private val scope: C
                     .nextUp()
                     .takeIf { it.isNotEmpty() }
                     ?.let { found += JellyfinRow("Next up", it, wide = true) }
+                runCatching { client.suggestions() }
+                    .getOrNull()
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { found += JellyfinRow("Suggestions", it, wide = false) }
                 client
                     .libraries()
                     .filter { it.isVideoLibrary() }
@@ -339,7 +346,64 @@ class JellyfinItemModel(
             }
         }
     }
+
+    fun setFavorite(favorite: Boolean, onMessage: (String) -> Unit) {
+        val current = item ?: return
+        scope.launch {
+            try {
+                client.setFavorite(current.id, favorite)
+                load()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onMessage(errorText(e))
+            }
+        }
+    }
 }
+
+/**
+ * Saves a movie's or an episode's file, as it is on the server, to the downloads folder. Returns
+ * the folder it goes to.
+ */
+private fun downloadToPc(app: AppGraph, item: BaseItemDto): File {
+    val source = item.mediaSources?.firstOrNull()
+    val containers = source?.container.orEmpty().split(',')
+    val extension =
+        (source?.path ?: item.path)?.substringAfterLast('.', "")?.takeIf {
+            it.length in 2..4 && it.all(Char::isLetterOrDigit)
+        }
+            ?: containers.firstOrNull { it == "mp4" || it == "mkv" }
+            ?: containers.firstOrNull { it.isNotBlank() }
+            ?: "mkv"
+    val name =
+        if (item.type == BaseItemKind.EPISODE) {
+            listOfNotNull(item.seriesName, episodeTitle(item)).joinToString(" - ")
+        } else {
+            item.name.orEmpty() + (item.productionYear?.let { " ($it)" } ?: "")
+        }
+    val folder = File(app.settings.downloadFolder)
+    app.downloads.startFile(
+        id = "jellyfin:${item.id}",
+        title = name,
+        url = app.jellyfin.downloadUrl(item.id),
+        header = app.jellyfin.authValue,
+        file = File(folder, "${Downloads.safeName(name)}.$extension"),
+        route = Route.JellyfinItem(item.id.toString()),
+    )
+    return folder
+}
+
+/** Cast and crew in a row, each opening what else they're in. */
+@Composable
+private fun PeopleRow(item: BaseItemDto) {
+    val people = item.people?.takeIf { it.isNotEmpty() } ?: return
+    SectionRow("Cast and crew", modifier = Modifier.padding(top = Spacings.default)) {
+        items(people.take(PEOPLE_SHOWN)) { person -> PersonCard(person) }
+    }
+}
+
+private const val PEOPLE_SHOWN = 40
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -411,6 +475,21 @@ fun JellyfinItemScreen(itemId: String) {
                             onClick = { model.setPlayed(!played, navigator::message) },
                             on = played,
                         )
+                        val favorite = item.userData?.isFavorite == true
+                        DetailButton(
+                            icon = if (favorite) "ic_heart_filled" else "ic_heart",
+                            label = if (favorite) "Take out of favourites" else "Add to favourites",
+                            onClick = { model.setFavorite(!favorite, navigator::message) },
+                            on = favorite,
+                        )
+                        DetailButton(
+                            icon = "ic_download",
+                            label = "Download to this PC",
+                            onClick = {
+                                val folder = downloadToPc(app, item)
+                                navigator.message("Saving to ${folder.path}")
+                            },
+                        )
                     },
                     details = {
                         if (episode) {
@@ -435,6 +514,7 @@ fun JellyfinItemScreen(itemId: String) {
                         }
                     },
                 )
+                PeopleRow(item)
             }
             ColumnScrollbar(model.scroll)
         }
@@ -496,6 +576,19 @@ class JellyfinShowModel(
                 error = errorText(e)
             } finally {
                 loading = false
+            }
+        }
+    }
+
+    fun setFavorite(favorite: Boolean, onMessage: (String) -> Unit) {
+        scope.launch {
+            try {
+                client.setFavorite(id, favorite)
+                show = client.item(id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                onMessage(errorText(e))
             }
         }
     }
@@ -569,6 +662,15 @@ fun JellyfinShowScreen(seriesId: String) {
                                     main = true,
                                     enabled = next != null,
                                 )
+                                val favorite = show.userData?.isFavorite == true
+                                DetailButton(
+                                    icon = if (favorite) "ic_heart_filled" else "ic_heart",
+                                    label =
+                                        if (favorite) "Take out of favourites"
+                                        else "Add to favourites",
+                                    onClick = { model.setFavorite(!favorite, navigator::message) },
+                                    on = favorite,
+                                )
                             },
                             details = {
                                 show.genres
@@ -587,6 +689,7 @@ fun JellyfinShowScreen(seriesId: String) {
                                 }
                             },
                         )
+                        PeopleRow(show)
                         if (model.seasons.size > 1) {
                             HeaderTabs(
                                 tabs = model.seasons.map { it.name.orEmpty() },
@@ -677,9 +780,10 @@ fun PosterCard(item: BaseItemDto, modifier: Modifier = Modifier) {
         subtitle = item.productionYear?.toString(),
         onClick = { navigator.open(item.route()) },
         onPlay =
-            if (item.type == BaseItemKind.SERIES) null
-            else {
+            if (item.plays()) {
                 { navigator.play(PlayerRequest.Jellyfin(item.id.toString())) }
+            } else {
+                null
             },
         aspectRatio = 2f / 3f,
         modifier = modifier,
@@ -699,7 +803,12 @@ fun WideCard(item: BaseItemDto, modifier: Modifier = Modifier) {
         title = if (episode) item.seriesName.orEmpty() else item.name.orEmpty(),
         subtitle = if (episode) episodeTitle(item) else item.productionYear?.toString(),
         onClick = { navigator.open(item.route()) },
-        onPlay = { navigator.play(PlayerRequest.Jellyfin(item.id.toString())) },
+        onPlay =
+            if (item.plays()) {
+                { navigator.play(PlayerRequest.Jellyfin(item.id.toString())) }
+            } else {
+                null
+            },
         modifier = modifier,
     ) {
         JellyfinImage(url = wideUrl(app.jellyfin, item), modifier = Modifier.fillMaxSize())
@@ -813,13 +922,37 @@ private fun runtime(seconds: Double): String {
 private fun BaseItemDto.isVideoLibrary(): Boolean =
     collectionType?.serialName in setOf("movies", "tvshows", "homevideos", "musicvideos")
 
-private fun BaseItemDto.route(): Route =
+/** The page of an item: a show's, what a library, collection or playlist holds, or its own. */
+internal fun BaseItemDto.route(): Route =
     when (type) {
         BaseItemKind.SERIES -> Route.JellyfinShow(id.toString())
-        BaseItemKind.EPISODE,
-        BaseItemKind.MOVIE -> Route.JellyfinItem(id.toString())
+        BaseItemKind.SEASON ->
+            seriesId?.let { Route.JellyfinShow(it.toString()) }
+                ?: Route.JellyfinFolder(id.toString(), name.orEmpty())
+        BaseItemKind.BOX_SET,
+        BaseItemKind.FOLDER,
+        BaseItemKind.COLLECTION_FOLDER,
+        BaseItemKind.USER_VIEW ->
+            Route.JellyfinFolder(
+                id = id.toString(),
+                title = name.orEmpty(),
+                collection = collectionType?.serialName,
+            )
+        BaseItemKind.PLAYLIST -> Route.JellyfinFolder(id.toString(), name.orEmpty(), ordered = true)
+        BaseItemKind.PERSON -> Route.JellyfinPerson(id.toString(), name.orEmpty())
         else -> Route.JellyfinItem(id.toString())
     }
+
+/** Whether the item is something to play, rather than something that holds others. */
+internal fun BaseItemDto.plays(): Boolean =
+    type in
+        setOf(
+            BaseItemKind.MOVIE,
+            BaseItemKind.EPISODE,
+            BaseItemKind.VIDEO,
+            BaseItemKind.MUSIC_VIDEO,
+            BaseItemKind.TRAILER,
+        )
 
 @Composable
 private fun posterUrl(item: BaseItemDto): String? {
