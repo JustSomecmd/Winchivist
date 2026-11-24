@@ -293,14 +293,14 @@ private fun ComputeActions(box: ComputeBox, settings: AppSettings) {
                     } else {
                         "Nothing is waiting to be heard with ${settings.hearModel}"
                     },
-                enabled = waiting > 0 && box.state == ComputeBox.State.WAITING,
+                enabled = waiting > 0 && box.state == ComputeBox.State.WAITING && !box.checking,
                 onClick = { box.start() },
             )
             JrwiActionTile(
                 icon = "ic_monitor",
                 name = "Check this PC",
                 text = "Whether Python, faster-whisper and the graphics card are ready to hear",
-                enabled = !box.checking,
+                enabled = !box.checking && box.state == ComputeBox.State.WAITING,
                 onClick = box::check,
             )
         }
@@ -386,7 +386,7 @@ private fun Choice(
     selected: String,
     onSelect: (String) -> Unit,
 ) {
-    Column(modifier = Modifier.padding(bottom = Spacings.small)) {
+    Column(modifier = Modifier.padding(bottom = Spacings.medium)) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,

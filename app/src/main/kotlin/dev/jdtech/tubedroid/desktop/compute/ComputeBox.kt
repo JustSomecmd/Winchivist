@@ -175,9 +175,7 @@ class ComputeBox(private val app: AppGraph) {
                     while (true) {
                         delay(WATCH_EVERY_MS)
                         val now = System.currentTimeMillis()
-                        if (state == State.WAITING && now >= notBefore && wanted()) {
-                            start(byItself = true)
-                        }
+                        if (!checking && now >= notBefore && wanted()) start(byItself = true)
                     }
                 }
         }
@@ -301,7 +299,8 @@ class ComputeBox(private val app: AppGraph) {
 
     /** Hears the episodes waiting, newest first, until there are none or it's paused. */
     fun start(byItself: Boolean = false) {
-        if (state != State.WAITING) return
+        // One program at a time: the check runs it too
+        if (state != State.WAITING || checking) return
         state = State.LISTING
         running = scope.launch { hearAll(byItself) }
     }
@@ -456,7 +455,7 @@ class ComputeBox(private val app: AppGraph) {
 
     /** Runs the program's own check: the archiver, Python, faster-whisper and the graphics card. */
     fun check() {
-        if (checking || state == State.HEARING) return
+        if (checking || state != State.WAITING) return
         checking = true
         checkText = null
         scope.launch {
@@ -576,7 +575,7 @@ class ComputeBox(private val app: AppGraph) {
                 process.waitFor()
             } finally {
                 if (process.isAlive) stop(process)
-                helper = null
+                if (helper === process) helper = null
             }
         }
 

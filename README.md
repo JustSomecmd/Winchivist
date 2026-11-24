@@ -9,7 +9,15 @@ desktop app uses.
 - Watch with Jellyfin-style controls over the video: chapters, subtitle and audio tracks, speed, skip buttons for
   SponsorBlock segments and Jellyfin's intros and credits, and Jellyfin's preview pictures on the seek bar
 - Pick up where you left off, and carry on with playlists where you stopped, also when you stopped on the phone
-- Jellyfin's movies and shows, played straight from the server's files
+- Jellyfin's movies and shows, played straight from the server's files, with its libraries, collections, playlists,
+  favourites and search
+- A JRWI archive, when a [JRWI archiver](https://github.com/JustSomecmd/jrwi-archiver) is set up: its feed, shows and
+  posts with their comments and files, an audio player beside the video player, transcripts that follow what plays,
+  and the archiver's status and controls
+- Windows notifications when Jellyfin adds a movie or an episode and when YouTube's bot detection stops a
+  TubeArchivist task. Two switches, off at first, keep Winchivist in the tray and start it with Windows
+- A compute box: this PC can hear episodes for the JRWI archiver's timed transcripts, by running the archiver's own
+  `jrwi_hear.py` with a Python on the PC that has faster-whisper
 
 ## Install and update
 
@@ -32,8 +40,9 @@ To run it yourself, you need JDK 17. On Windows, download an mpv-dev-x86_64 buil
 ./gradlew :app:run
 ```
 
-The `tubearchivist` module is the same as Tubedroid's, so both apps talk to TubeArchivist the same way. Changes to it
-are made in both repositories.
+The `tubearchivist` and `jrwi` modules are the same as Tubedroid's, so both apps talk to TubeArchivist and the JRWI
+archiver the same way. Changes to them are made in both repositories. `app/src/main/resources/hear/jrwi_hear.py` is a
+copy of the JRWI archiver's PC program (`jrwi/pc/jrwi_hear.py` there), to be replaced when that one changes.
 
 ## License
 
