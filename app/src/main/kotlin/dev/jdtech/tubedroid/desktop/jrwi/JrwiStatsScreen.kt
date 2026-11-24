@@ -106,6 +106,16 @@ fun JrwiStatsScreen() {
                 JrwiPageState(loading = true, error = model.error, onRetry = model::refresh)
                 return@Column
             }
+            // Above the cards rather than among them, so it shows wherever they're scrolled to
+            model.error?.let { error ->
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier =
+                        Modifier.padding(horizontal = Spacings.default)
+                            .padding(top = Spacings.medium),
+                )
+            }
             Box(modifier = Modifier.fillMaxSize()) {
                 LazyVerticalGrid(
                     state = model.gridState,
@@ -115,11 +125,6 @@ fun JrwiStatsScreen() {
                     verticalArrangement = Arrangement.spacedBy(Spacings.medium),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    model.error?.let { error ->
-                        item(key = "error", span = { GridItemSpan(maxLineSpan) }) {
-                            Text(text = error, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
                     item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
                         JrwiStatsHero(stats, model.status)
                     }

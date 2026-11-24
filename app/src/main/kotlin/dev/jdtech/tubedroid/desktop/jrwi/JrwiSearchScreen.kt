@@ -57,6 +57,7 @@ import dev.jdtech.tubedroid.desktop.ui.LoadMoreEffect
 import dev.jdtech.tubedroid.desktop.ui.PagePadding
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.fullDate
+import dev.jdtech.tubedroid.desktop.ui.gridTop
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -230,7 +231,7 @@ fun JrwiSearch(bar: @Composable () -> Unit, show: String?, tag: String?) {
                     horizontalArrangement = Arrangement.spacedBy(Spacings.small),
                     verticalArrangement = Arrangement.spacedBy(Spacings.small),
                     modifier =
-                        Modifier.padding(horizontal = PagePadding, vertical = Spacings.medium),
+                        Modifier.padding(horizontal = PagePadding).padding(top = Spacings.medium),
                 ) {
                     JrwiMenuButton(
                         label = model.show?.let { showNames[it] ?: it } ?: "All shows",
@@ -281,7 +282,9 @@ fun JrwiSearch(bar: @Composable () -> Unit, show: String?, tag: String?) {
                             },
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = PagePadding),
+                        modifier =
+                            Modifier.padding(horizontal = PagePadding)
+                                .padding(top = Spacings.medium),
                     )
                     return@Column
                 }
@@ -300,6 +303,7 @@ fun JrwiSearch(bar: @Composable () -> Unit, show: String?, tag: String?) {
                         verticalArrangement = Arrangement.spacedBy(Spacings.medium),
                         modifier = Modifier.fillMaxSize(),
                     ) {
+                        gridTop()
                         results.total?.let { total ->
                             item(key = "count", span = { GridItemSpan(maxLineSpan) }) {
                                 Text(

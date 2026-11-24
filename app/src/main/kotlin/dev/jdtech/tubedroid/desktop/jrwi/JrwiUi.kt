@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -149,18 +150,20 @@ fun JrwiBar(
             RoundIconButton(icon = "ic_arrow_left", label = "Back", onClick = onBack)
             Spacer(Modifier.width(Spacings.small))
         }
-        if (start != null) {
-            start()
-        } else {
-            Text(
-                text = title.orEmpty(),
-                style = MaterialTheme.typography.titleLarge,
-                color = JrwiColors.Text,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        // Whatever room the buttons leave, so they sit at the end however long the title is
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+            if (start != null) {
+                start()
+            } else {
+                Text(
+                    text = title.orEmpty(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = JrwiColors.Text,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
-        Spacer(Modifier.weight(1f))
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Spacings.small),
@@ -288,11 +291,26 @@ fun JrwiThumbnail(
 ) {
     val repository = LocalApp.current.jrwi
     Box(modifier = modifier.aspectRatio(16f / 9f).clip(JrwiShape)) {
-        JrwiImage(
-            path = item.thumbnail,
-            contentScale = contentScale,
-            modifier = Modifier.fillMaxSize(),
-        )
+        if (item.thumbnail != null) {
+            JrwiImage(
+                path = item.thumbnail,
+                contentScale = contentScale,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            // A post with no picture of its own: the die, faintly, rather than an empty box
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier.fillMaxSize().background(JrwiColors.Picture),
+            ) {
+                AppIcon(
+                    name = "ic_dice",
+                    contentDescription = null,
+                    tint = JrwiColors.Text.copy(alpha = 0.16f),
+                    modifier = Modifier.fillMaxHeight(0.36f).aspectRatio(1f),
+                )
+            }
+        }
         if (marks) {
             if (repository.finished(item)) {
                 JrwiPictureBadge(

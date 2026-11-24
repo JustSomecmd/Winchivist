@@ -17,7 +17,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.rememberScrollbarAdapter
 import androidx.compose.foundation.shape.CircleShape
@@ -353,6 +356,24 @@ fun LoadMoreEffect(state: LazyListState, onLoadMore: () -> Unit) {
 }
 
 private const val LOAD_MORE_THRESHOLD = 6
+
+/**
+ * The first row of a list whose other rows come and go. A lazy list holds on to the row at its top
+ * by its key, so one that starts as only its footer follows the footer down once the rows arrive,
+ * and a row that's added above the first one stays out of sight. With this always first, a list at
+ * its top stays at its top.
+ */
+fun LazyListScope.listTop() {
+    item(key = LIST_TOP, contentType = LIST_TOP) { Spacer(Modifier.height(1.dp)) }
+}
+
+fun LazyGridScope.gridTop() {
+    item(key = LIST_TOP, span = { GridItemSpan(maxLineSpan) }, contentType = LIST_TOP) {
+        Spacer(Modifier.height(1.dp))
+    }
+}
+
+private const val LIST_TOP = "list-top"
 
 /** A scroll bar along the right edge, as desktop apps have. */
 @Composable

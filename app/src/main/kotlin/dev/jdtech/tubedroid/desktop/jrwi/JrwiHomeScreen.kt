@@ -64,6 +64,7 @@ import dev.jdtech.tubedroid.desktop.ui.PagePadding
 import dev.jdtech.tubedroid.desktop.ui.SectionRow
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.fullDate
+import dev.jdtech.tubedroid.desktop.ui.listTop
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.ceil
 import kotlinx.coroutines.CoroutineScope
@@ -338,10 +339,11 @@ private fun JrwiHomeList(model: JrwiHomeModel, onOpen: (Long) -> Unit) {
     val showNames = remember(app.jrwi.shows) { app.jrwi.shows.associate { it.id to it.name } }
     LazyColumn(
         state = model.listState,
-        contentPadding = PaddingValues(top = Spacings.medium, bottom = Spacings.large),
+        contentPadding = PaddingValues(bottom = Spacings.large),
         verticalArrangement = Arrangement.spacedBy(Spacings.medium),
         modifier = Modifier.fillMaxSize(),
     ) {
+        listTop()
         if (model.continueWatching.isNotEmpty()) {
             item(key = "continue") {
                 SectionRow("Continue watching") {

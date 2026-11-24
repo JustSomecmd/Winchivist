@@ -284,7 +284,7 @@ fun main(args: Array<String>) {
             ImageComposeScene(width = 1360, height = 860, density = Density(1f)) {
                 CompositionLocalProvider(LocalApp provides graph) {
                     TubedroidTheme(accent = settings.accent) {
-                        SettingsScreen(firstRun = true, onDone = {})
+                        SettingsScreen(firstRun = true, onDone = {}, onSkip = {})
                     }
                 }
             }
