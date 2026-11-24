@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -168,8 +170,29 @@ private fun AskCard(
                 Button(shape = JrwiShape, onClick = onHear) {
                     Text(if (one) "Hear it now" else "Hear them now")
                 }
-                OutlinedButton(shape = JrwiShape, onClick = onLater) { Text("In an hour") }
-                TextButton(shape = JrwiShape, onClick = onTomorrow) { Text("Not today") }
+                // The theme's own outline is the card's colour, so these two say theirs
+                OutlinedButton(
+                    shape = JrwiShape,
+                    border =
+                        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)),
+                    colors =
+                        ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.primary
+                        ),
+                    onClick = onLater,
+                ) {
+                    Text("In an hour")
+                }
+                TextButton(
+                    shape = JrwiShape,
+                    colors =
+                        ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                        ),
+                    onClick = onTomorrow,
+                ) {
+                    Text("Not today")
+                }
             }
         }
     }

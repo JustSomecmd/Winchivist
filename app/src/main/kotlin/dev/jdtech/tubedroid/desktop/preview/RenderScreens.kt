@@ -203,12 +203,6 @@ fun main(args: Array<String>) {
         capture("ask-jrwi")
         shell.select(Section.HOME)
         capture("ask")
-        settings.hearWhen = AppSettings.HEAR_ASK
-        graph.compute.askLater(tomorrow = false)
-        shell.select(Section.JRWI_COMPUTE)
-        capture("jrwi-compute-ask")
-        settings.hearWhen = AppSettings.HEAR_BY_HAND
-        settings.hearAskAfter = null
         graph.compute.showForPreview()
         shell.select(Section.JRWI_STATS)
         capture("jrwi-stats")
@@ -265,8 +259,7 @@ fun main(args: Array<String>) {
                     Section.JRWI_ARCHIVER to "jrwi-archiver",
                     Section.JRWI_COMPUTE to "jrwi-compute",
                 )
-            for ((section, name) in pages) {
-                blockShell.select(section)
+            suspend fun shoot(name: String) {
                 repeat(16) {
                     blockScene.render(time)
                     time += 200_000_000L
@@ -276,6 +269,20 @@ fun main(args: Array<String>) {
                     File(output, "$name-$suffix.png").writeBytes(it.bytes)
                 }
                 println("Rendered $name-$suffix")
+            }
+            for ((section, name) in pages) {
+                blockShell.select(section)
+                shoot(name)
+            }
+            if (suffix == "tall") {
+                // The Compute box page while it asks first, after the answer was "not now"
+                graph.compute.askForPreview()
+                settings.hearWhen = AppSettings.HEAR_ASK
+                graph.compute.askLater(tomorrow = false)
+                shoot("jrwi-compute-ask")
+                settings.hearWhen = AppSettings.HEAR_BY_HAND
+                settings.hearAskAfter = null
+                graph.compute.showForPreview()
             }
             blockScene.close()
         }
