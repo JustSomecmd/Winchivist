@@ -791,11 +791,17 @@ class ComputeBox(private val app: AppGraph) {
                     System.err.println("Couldn't fetch the archiver's program: $e")
                     false
                 }
-        } else if (ping != null && offered == null && bundled != null) {
-            if (!(file.isFile && file.readBytes().contentEquals(bundled))) save(file, bundled)
         }
-        // With neither, such as before the archiver was ever reached
-        if (!file.isFile && bundled != null) save(file, bundled)
+        if (!fromArchiver && bundled != null) {
+            // Without the archiver's copy it's the one that came with Winchivist: always for an
+            // archiver that hands none out, and otherwise unless the copy here is as new
+            val own = versionOf(bundled.toString(Charsets.UTF_8))
+            val stale = here == null || (own != null && older(here, own))
+            val handsNoneOut = ping != null && offered == null
+            if (stale || handsNoneOut) {
+                if (!(file.isFile && file.readBytes().contentEquals(bundled))) save(file, bundled)
+            }
+        }
         val version = file.takeIf { it.isFile }?.readText()?.let(::versionOf)
         programShown =
             listOfNotNull(
