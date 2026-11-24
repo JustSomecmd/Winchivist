@@ -4,6 +4,7 @@ import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -30,7 +31,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -40,6 +40,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -51,7 +52,6 @@ import dev.jdtech.tubedroid.desktop.jrwi.jrwiErrorText
 import dev.jdtech.tubedroid.desktop.ui.RoundIconButton
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.flow.first
 
 /**
  * A JRWI episode's transcript, as the archive's web app shows it under its player: each turn with
@@ -141,25 +141,24 @@ private fun TranscriptLines(
     val current by
         remember(times) { derivedStateOf { if (times.any) times.lineAt(position()) else -1 } }
 
-    LaunchedEffect(current, following) {
-        if (!following || current < 0) return@LaunchedEffect
-        // The line being spoken sits a third of the way down, once the list knows its height
-        val height = snapshotFlow { listState.layoutInfo.viewportSize.height }.first { it > 0 }
-        if (placed) {
-            listState.animateScrollToItem(current, -(height / 3))
-        } else {
-            listState.scrollToItem(current, -(height / 3))
-            placed = true
-        }
-    }
-
-    Box(
+    BoxWithConstraints(
         modifier =
             Modifier.fillMaxSize().onPointerEvent(PointerEventType.Scroll) {
                 // Scrolled by hand, the lines stay where they're put
                 if (times.any) following = false
             }
     ) {
+        // The line being spoken sits a third of the way down
+        val third = with(LocalDensity.current) { (maxHeight / 3).roundToPx() }
+        LaunchedEffect(current, following, third) {
+            if (!following || current < 0) return@LaunchedEffect
+            if (placed) {
+                listState.animateScrollToItem(current, -third)
+            } else {
+                listState.scrollToItem(current, -third)
+                placed = true
+            }
+        }
         LazyColumn(
             state = listState,
             contentPadding = PaddingValues(top = Spacings.small, bottom = 96.dp),
