@@ -87,9 +87,9 @@ fun JrwiComputeScreen() {
                 FullLine(id = "status") { ComputeStatusCard(box, app.settings) }
                 FullLine(id = "actions") { ComputeActions(box, app.settings) }
                 // The lists grow while it hears, so their rough heights are fixed ones
-                Block(id = "settings", about = 620.dp) { ComputeSettingsCard(app.settings) }
+                Block(id = "settings", about = 560.dp) { ComputeSettingsCard(app.settings) }
                 Block(id = "pc", about = 340.dp) { ComputePcCard(box, app.settings) }
-                Block(id = "heard", about = 280.dp) { ComputeHeardCard(box.heard, open) }
+                Block(id = "heard", about = 400.dp) { ComputeHeardCard(box.heard, open) }
                 Block(id = "waiting", about = 520.dp) { ComputeWaitingCard(box, open) }
             }
         }

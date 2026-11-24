@@ -267,9 +267,10 @@ fun JrwiArchiverScreen() {
             ) {
                 FullLine(id = "status") { JrwiStatusCard(status, model.lastRun) }
                 FullLine(id = "actions") { JrwiArchiverActions(model = model, status = status) }
-                // These lists come and go by the day, so their rough heights are fixed ones
+                // These lists come and go by the day, so their rough heights are fixed ones: a week
+                // of events, a podcast feed with its ten newest, and a few problems
                 Block(id = "events", about = 480.dp) { JrwiEventsCard(model.events, open) }
-                Block(id = "podcast", about = 420.dp) {
+                Block(id = "podcast", about = 700.dp) {
                     JrwiPodcastCard(
                         supported = model.has(JrwiFeature.PODCAST),
                         podcast = model.podcast,

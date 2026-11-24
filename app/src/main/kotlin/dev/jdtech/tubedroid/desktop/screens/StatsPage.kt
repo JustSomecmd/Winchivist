@@ -210,12 +210,15 @@ fun TaHomeStatsPage(
                         }
                     }
                     if (stats.downloads != null || stats.history != null) {
-                        Block(id = "downloads", about = 330.dp) {
+                        Block(id = "downloads", about = 304.dp) {
                             TaDownloadsStatsCard(stats.downloads, stats.history, stats.metricSizes)
                         }
                     }
                     if (stats.biggest.isNotEmpty()) {
-                        Block(id = "biggest", about = 560.dp) {
+                        Block(
+                            id = "biggest",
+                            about = 112.dp + 40.dp * minOf(stats.biggest.size, 10),
+                        ) {
                             TaBiggestChannelsCard(
                                 biggest = stats.biggest,
                                 metricSizes = stats.metricSizes,

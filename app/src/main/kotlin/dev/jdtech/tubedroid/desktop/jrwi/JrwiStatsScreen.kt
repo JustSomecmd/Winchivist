@@ -247,53 +247,55 @@ private fun BlockFlowScope.JrwiStatsCards(
     onItemClick: (Long) -> Unit,
 ) {
     if (stats.watch.total > 0) {
-        Block(id = "watch", about = 330.dp) { JrwiWatchCard(stats.watch) }
+        Block(id = "watch", about = 332.dp) { JrwiWatchCard(stats.watch) }
     }
-    Block(id = "contents", about = 360.dp) { JrwiContentsCard(stats, status) }
+    Block(id = "contents", about = 365.dp) { JrwiContentsCard(stats, status) }
     if (stats.shows.isNotEmpty()) {
-        Block(id = "shows", about = 110.dp + ROW_ABOUT * minOf(stats.shows.size, 10)) {
+        Block(id = "shows", about = 100.dp + RANK_ABOUT * minOf(stats.shows.size, 10)) {
             JrwiShowsCard(stats.shows, onShowClick)
         }
     }
     stats.archivedDays?.let { days ->
-        Block(id = "archived", about = 270.dp) { JrwiArchivedCard(days, stats.failedChecks) }
+        Block(id = "archived", about = 244.dp) { JrwiArchivedCard(days, stats.failedChecks) }
     }
     if (stats.byYear.isNotEmpty()) {
-        Block(id = "years", about = 250.dp) { JrwiYearsCard(stats) }
+        Block(id = "years", about = 208.dp) { JrwiYearsCard(stats) }
     }
     if (stats.likes > 0 || stats.comments > 0) {
-        Block(id = "community", about = 620.dp) { JrwiCommunityCard(stats, onItemClick) }
+        Block(id = "community", about = 404.dp) { JrwiCommunityCard(stats, onItemClick) }
     }
-    Block(id = "records", about = 260.dp) { JrwiRecordsCard(stats, onItemClick) }
+    Block(id = "records", about = 256.dp) { JrwiRecordsCard(stats, onItemClick) }
     if (stats.bothVersions > 0 || stats.heights.isNotEmpty()) {
-        Block(id = "versions", about = 200.dp + ROW_ABOUT * stats.heights.size) {
+        Block(id = "versions", about = 157.dp + RANK_ABOUT * stats.heights.size) {
             JrwiVersionsCard(stats)
         }
     }
     // What the archiver counts itself
     stats.extra?.let { extra ->
         if (extra.checks.isNotEmpty()) {
-            Block(id = "checks", about = 60.dp + ROW_ABOUT * extra.checks.size) {
+            Block(id = "checks", about = 136.dp + LINE_ABOUT * extra.checks.size) {
                 JrwiChecksCard(extra.checks)
             }
         }
         if (extra.files.isNotEmpty()) {
-            Block(id = "files", about = 60.dp + ROW_ABOUT * extra.files.size) {
+            Block(id = "files", about = 64.dp + LINE_ABOUT * extra.files.size) {
                 JrwiFilesCard(extra.files)
             }
         }
         extra.comments
             ?.takeIf { it.total > 0 }
             ?.let { comments ->
-                Block(id = "commenters", about = 150.dp + ROW_ABOUT * comments.top.size) {
+                Block(id = "commenters", about = 148.dp + LINE_ABOUT * comments.top.size) {
                     JrwiCommentersCard(comments)
                 }
             }
     }
 }
 
-/** About how tall a line of a card's list is, for sharing the cards out. */
-private val ROW_ABOUT = 44.dp
+// About how tall a line of a card's list is, for sharing the cards out: one with a bar under
+// it, and one with a second line of small print
+private val RANK_ABOUT = 40.dp
+private val LINE_ABOUT = 48.dp
 
 /** How much of the archive was watched or listened to, by playing time. */
 @Composable
