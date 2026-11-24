@@ -3,10 +3,12 @@ package dev.jdtech.tubedroid.desktop.jellyfin
 import dev.jdtech.jellyfin.tubearchivist.TaPlaylistSessionStore
 import dev.jdtech.jellyfin.tubearchivist.TaPlaylistSessionSync
 import dev.jdtech.tubedroid.desktop.AppSettings
+import dev.jdtech.tubedroid.desktop.player.StreamQuality
 import java.net.InetAddress
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.jellyfin.sdk.api.client.extensions.authenticationApi
 import org.jellyfin.sdk.api.client.extensions.displayPreferenceApi
 import org.jellyfin.sdk.api.client.extensions.libraryApi
@@ -22,11 +24,18 @@ import org.jellyfin.sdk.model.DeviceInfo
 import org.jellyfin.sdk.model.api.AuthenticateUserByName
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
+import org.jellyfin.sdk.model.api.CodecProfile
+import org.jellyfin.sdk.model.api.CodecType
 import org.jellyfin.sdk.model.api.DeviceProfile
+import org.jellyfin.sdk.model.api.DlnaProfileType
+import org.jellyfin.sdk.model.api.EncodingContext
 import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.ItemFields
 import org.jellyfin.sdk.model.api.ItemSortBy
 import org.jellyfin.sdk.model.api.MediaSegmentDto
+import org.jellyfin.sdk.model.api.MediaStream
+import org.jellyfin.sdk.model.api.MediaStreamProtocol
+import org.jellyfin.sdk.model.api.MediaStreamType
 import org.jellyfin.sdk.model.api.PlayMethod
 import org.jellyfin.sdk.model.api.PlaybackInfoDto
 import org.jellyfin.sdk.model.api.PlaybackInfoResponse
@@ -34,10 +43,14 @@ import org.jellyfin.sdk.model.api.PlaybackOrder
 import org.jellyfin.sdk.model.api.PlaybackProgressInfo
 import org.jellyfin.sdk.model.api.PlaybackStartInfo
 import org.jellyfin.sdk.model.api.PlaybackStopInfo
+import org.jellyfin.sdk.model.api.ProfileCondition
+import org.jellyfin.sdk.model.api.ProfileConditionType
+import org.jellyfin.sdk.model.api.ProfileConditionValue
 import org.jellyfin.sdk.model.api.RepeatMode
 import org.jellyfin.sdk.model.api.SortOrder
 import org.jellyfin.sdk.model.api.SubtitleDeliveryMethod
 import org.jellyfin.sdk.model.api.SubtitleProfile
+import org.jellyfin.sdk.model.api.TranscodingProfile
 
 /**
  * Jellyfin, through its own Kotlin library, as the phone app uses it. Signing in keeps the server,
@@ -278,6 +291,119 @@ class JellyfinClient(private val settings: AppSettings) {
                 .content
         }
 
+    /** A stream Jellyfin converts, and the subtitle files that come beside it. */
+    class Converted(val url: String, val subtitles: List<MediaStream>)
+
+    /**
+     * Asks Jellyfin to convert an item to at most [quality], as the phone app does: H.264 and AAC
+     * over HLS, with the subtitles as files beside it. Null when the server offers no such stream.
+     */
+    suspend fun convertedStream(
+        id: UUID,
+        mediaSourceId: String,
+        quality: StreamQuality,
+        audioStreamIndex: Int?,
+    ): Converted? =
+        withContext(Dispatchers.IO) {
+            val size =
+                listOf(
+                    ProfileCondition(
+                        condition = ProfileConditionType.LESS_THAN_EQUAL,
+                        property = ProfileConditionValue.WIDTH,
+                        value = quality.maxWidth.toString(),
+                        isRequired = false,
+                    ),
+                    ProfileCondition(
+                        condition = ProfileConditionType.LESS_THAN_EQUAL,
+                        property = ProfileConditionValue.HEIGHT,
+                        value = quality.maxHeight.toString(),
+                        isRequired = false,
+                    ),
+                )
+            val response =
+                api.mediaInfoApi
+                    .getPostedPlaybackInfo(
+                        id,
+                        PlaybackInfoDto(
+                            userId = userId,
+                            mediaSourceId = mediaSourceId,
+                            audioStreamIndex = audioStreamIndex,
+                            maxStreamingBitrate = quality.maxBitrate,
+                            enableDirectPlay = false,
+                            enableDirectStream = false,
+                            enableTranscoding = true,
+                            allowVideoStreamCopy = false,
+                            allowAudioStreamCopy = true,
+                            autoOpenLiveStream = true,
+                            deviceProfile =
+                                DeviceProfile(
+                                    name = "Winchivist converted",
+                                    maxStreamingBitrate = quality.maxBitrate,
+                                    maxStaticBitrate = quality.maxBitrate,
+                                    directPlayProfiles = emptyList(),
+                                    transcodingProfiles =
+                                        listOf(
+                                            TranscodingProfile(
+                                                container = "ts",
+                                                type = DlnaProfileType.VIDEO,
+                                                videoCodec = "h264",
+                                                audioCodec = "aac",
+                                                protocol = MediaStreamProtocol.HLS,
+                                                context = EncodingContext.STREAMING,
+                                                maxAudioChannels = "2",
+                                                minSegments = 1,
+                                                breakOnNonKeyFrames = true,
+                                                conditions = emptyList(),
+                                            )
+                                        ),
+                                    containerProfiles = emptyList(),
+                                    codecProfiles =
+                                        listOf(
+                                            CodecProfile(
+                                                type = CodecType.VIDEO,
+                                                codec = "h264",
+                                                conditions = size,
+                                                applyConditions = emptyList(),
+                                            )
+                                        ),
+                                    subtitleProfiles =
+                                        listOf("srt", "subrip", "ass", "ssa", "vtt", "webvtt").map {
+                                            SubtitleProfile(it, SubtitleDeliveryMethod.EXTERNAL)
+                                        },
+                                ),
+                        ),
+                    )
+                    .content
+            val source =
+                response.mediaSources.firstOrNull { it.id == mediaSourceId }
+                    ?: response.mediaSources.firstOrNull()
+                    ?: return@withContext null
+            val path = source.transcodingUrl?.takeIf { it.isNotBlank() } ?: return@withContext null
+            val subtitles =
+                source.mediaStreams.orEmpty().filter {
+                    it.type == MediaStreamType.SUBTITLE &&
+                        it.deliveryMethod == SubtitleDeliveryMethod.EXTERNAL &&
+                        !it.deliveryUrl.isNullOrBlank()
+                }
+            Converted(limitSize(serverUrl(path), quality), subtitles)
+        }
+
+    /**
+     * Makes sure the stream asks for at most the quality's size, whatever the server made of it.
+     */
+    private fun limitSize(url: String, quality: StreamQuality): String {
+        val parsed = url.toHttpUrlOrNull() ?: return url
+        val builder = parsed.newBuilder()
+        parsed.queryParameterNames
+            .filter { it.equals("MaxWidth", true) || it.equals("MaxHeight", true) }
+            .forEach { builder.removeAllQueryParameters(it) }
+        return builder
+            .addQueryParameter("MaxWidth", quality.maxWidth.toString())
+            .addQueryParameter("MaxHeight", quality.maxHeight.toString())
+            .build()
+            .toString()
+    }
+
     /** The parts of an item Jellyfin knows of, such as its intro and credits, to skip. */
     suspend fun segments(id: UUID): List<MediaSegmentDto> =
         withContext(Dispatchers.IO) { api.mediaSegmentApi.getItemSegments(id).content.items }
@@ -295,7 +421,8 @@ class JellyfinClient(private val settings: AppSettings) {
                     isPaused = state.paused,
                     isMuted = state.muted,
                     volumeLevel = state.volume,
-                    playMethod = PlayMethod.DIRECT_PLAY,
+                    playMethod =
+                        if (state.converted) PlayMethod.TRANSCODE else PlayMethod.DIRECT_PLAY,
                     repeatMode = RepeatMode.REPEAT_NONE,
                     playbackOrder = PlaybackOrder.DEFAULT,
                     positionTicks = ticks(state.seconds),
@@ -317,7 +444,8 @@ class JellyfinClient(private val settings: AppSettings) {
                     isPaused = state.paused,
                     isMuted = state.muted,
                     volumeLevel = state.volume,
-                    playMethod = PlayMethod.DIRECT_PLAY,
+                    playMethod =
+                        if (state.converted) PlayMethod.TRANSCODE else PlayMethod.DIRECT_PLAY,
                     repeatMode = RepeatMode.REPEAT_NONE,
                     playbackOrder = PlaybackOrder.DEFAULT,
                     positionTicks = ticks(state.seconds),
@@ -355,6 +483,8 @@ class JellyfinClient(private val settings: AppSettings) {
         val playSessionId: String? = null,
         val audioStreamIndex: Int? = null,
         val subtitleStreamIndex: Int? = null,
+        /** Jellyfin converts the stream, rather than sending the file as it is. */
+        val converted: Boolean = false,
     )
 
     /** The file itself, as stored on the server, which mpv plays as it is. */

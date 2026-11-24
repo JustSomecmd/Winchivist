@@ -5,7 +5,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.jdtech.jellyfin.jrwi.JrwiItem
 import dev.jdtech.tubedroid.desktop.AppGraph
+import java.io.File
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlinx.coroutines.CoroutineScope
@@ -16,6 +18,10 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /**
  * The app's audio player, apart from the video player, as a podcast app has it: a JRWI episode's
@@ -72,6 +78,7 @@ class AudioPlayer(private val app: AppGraph) {
         this.running = running
         this.request = request
         this.session = session
+        session.onStopped = { if (this.session === session) close() }
         if (lib == null) {
             session.loading = false
             session.error = MpvLoader.loadError ?: "Couldn't load mpv"
@@ -123,7 +130,10 @@ class AudioPlayer(private val app: AppGraph) {
     private fun onEvent(session: PlayerSession, event: MpvEvent) {
         if (this.session !== session) return
         when (event) {
-            MpvEvent.FileLoaded -> session.onFileLoaded()
+            MpvEvent.FileLoaded -> {
+                session.onFileLoaded()
+                showPicture(session)
+            }
             is MpvEvent.LoadFailed -> session.onLoadFailed(event.message)
             MpvEvent.Shutdown -> close()
             MpvEvent.AudioDevicesChanged -> {
@@ -152,6 +162,62 @@ class AudioPlayer(private val app: AppGraph) {
         if (session.paused || session.loading) return
         session.pause()
         tick()
+    }
+
+    /**
+     * Gives mpv the picture of what plays, as cover art, which it shows in Windows' media controls.
+     * Windows reads the picture itself, so it's handed over as a file of the app's own rather than
+     * as an address, which for the archive and TubeArchivist would need their token.
+     */
+    private fun showPicture(session: PlayerSession) {
+        val item = session.item ?: return
+        val address = item.picture ?: return
+        running?.launch {
+            val file =
+                withContext(Dispatchers.IO) { runCatching { fetchPicture(address) }.getOrNull() }
+                    ?: return@launch
+            if (this@AudioPlayer.session !== session || session.item?.id != item.id) return@launch
+            session.player?.command("video-add", file.path, "auto", "Cover", "", "yes")
+        }
+    }
+
+    private val pictures by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** Saves the picture at [address] in the app's own folder, in place of the one before it. */
+    private fun fetchPicture(address: String): File? {
+        val url = address.toHttpUrlOrNull() ?: return null
+        val tubeArchivist = app.api.baseUrl?.toHttpUrlOrNull()
+        // Each server's token only ever goes to that server
+        val header =
+            when {
+                tubeArchivist != null &&
+                    url.host == tubeArchivist.host &&
+                    url.port == tubeArchivist.port -> app.api.authHeader
+                app.jrwi.api.isArchiverUrl(url) -> app.jrwi.api.authHeader
+                else -> null
+            }
+        val request =
+            Request.Builder().url(url).apply { header?.let { header("Authorization", it) } }.build()
+        val folder =
+            File(
+                System.getenv("LOCALAPPDATA") ?: System.getProperty("java.io.tmpdir"),
+                "Winchivist/now-playing",
+            )
+        folder.mkdirs()
+        val extension =
+            url.encodedPath.substringAfterLast('.', "").takeIf { it.length in 3..4 } ?: "jpg"
+        val file = File(folder, "cover-${address.hashCode().toUInt()}.$extension")
+        pictures.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            file.outputStream().use { out -> response.body.byteStream().use { it.copyTo(out) } }
+        }
+        folder.listFiles()?.filter { it != file }?.forEach { it.delete() }
+        return file
     }
 
     /** Whether [request] asks for what's loaded now. */

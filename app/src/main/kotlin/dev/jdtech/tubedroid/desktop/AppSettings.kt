@@ -48,6 +48,12 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
     /** What to do at a SponsorBlock segment: button, auto or off. */
     var sponsorBlock: String by stored<String>("sponsorblock", SPONSORBLOCK_BUTTON)
 
+    /** What to do at Jellyfin's own segments, such as intros and credits: button, auto or off. */
+    var mediaSegments: String by stored<String>("media_segments", SPONSORBLOCK_BUTTON)
+
+    /** How Jellyfin's videos are streamed, as a StreamQuality's key: the file itself unless set. */
+    var streamQuality: String by stored<String>("stream_quality", "original")
+
     /** mpv's hardware decoding, as its hwdec option. */
     var hardwareDecoding: String by stored<String>("hwdec", "auto-safe")
 

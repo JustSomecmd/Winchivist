@@ -112,8 +112,11 @@ internal class PlayerSession(
     var item by mutableStateOf<PlayItem?>(null)
         private set
 
-    /** The title of what plays next, if anything does. */
+    /** The title of what plays next, if anything does, and its picture where it has one. */
     var upNext by mutableStateOf<String?>(null)
+        private set
+
+    var upNextPicture by mutableStateOf<String?>(null)
         private set
 
     /** Whether the playlist starts over after its last video, as on YouTube. */
@@ -151,6 +154,10 @@ internal class PlayerSession(
 
     /** Where the video's chapters start, in seconds, for the marks on the seek bar. */
     var chapters by mutableStateOf<List<Double>>(emptyList())
+        private set
+
+    /** The chapters' names, one for each of [chapters]. */
+    var chapterTitles by mutableStateOf<List<String>>(emptyList())
         private set
 
     /** Whether mpv's playback info shows over the video. */
@@ -289,7 +296,14 @@ internal class PlayerSession(
         subtitleTracks = subtitles
         audioTracks = audio
         val chapterCount = player.get("chapter-list/count")?.toIntOrNull() ?: 0
-        chapters = (0 until chapterCount).mapNotNull { player.getDouble("chapter-list/$it/time") }
+        val read =
+            (0 until chapterCount).mapNotNull { index ->
+                val time = player.getDouble("chapter-list/$index/time") ?: return@mapNotNull null
+                val title = player.get("chapter-list/$index/title")?.takeIf { it.isNotBlank() }
+                time to (title ?: "Chapter ${index + 1}")
+            }
+        chapters = read.map { it.first }
+        chapterTitles = read.map { it.second }
     }
 
     /** A language's name in English, from a code such as en or eng. */
@@ -367,13 +381,14 @@ internal class PlayerSession(
             KeyEvent.VK_K -> togglePause()
             KeyEvent.VK_LEFT -> seekBy(-5.0)
             KeyEvent.VK_RIGHT -> seekBy(5.0)
-            KeyEvent.VK_J -> seekBy(-10.0)
-            KeyEvent.VK_L -> seekBy(10.0)
+            KeyEvent.VK_J -> seekBack()
+            KeyEvent.VK_L -> seekForward()
             KeyEvent.VK_UP -> changeVolume((volume + 5).coerceAtMost(100.0))
             KeyEvent.VK_DOWN -> changeVolume((volume - 5).coerceAtLeast(0.0))
             KeyEvent.VK_M -> toggleMute()
             KeyEvent.VK_F -> toggleFullscreen()
             KeyEvent.VK_C -> cycleSubtitles()
+            KeyEvent.VK_Z -> toggleFill()
             KeyEvent.VK_ENTER -> skip()
             KeyEvent.VK_ESCAPE -> if (fullscreen) player?.set("fullscreen", "no") else onClose()
             else -> return false
@@ -492,8 +507,10 @@ internal class PlayerSession(
         segment = null
         ended = false
         upNext = null
+        upNextPicture = null
         upNextCancelled = false
         chapters = emptyList()
+        chapterTitles = emptyList()
         subtitleTracks = emptyList()
         audioTracks = emptyList()
         if (item.transcriptPost == null) transcriptOpen = false
@@ -519,16 +536,54 @@ internal class PlayerSession(
     /** Finds what plays after [item], for the button that plays it and for autoplay. */
     private fun loadUpNext(item: PlayItem) {
         scope.launch {
-            upNext =
+            val next =
                 try {
-                    source.nextTitle(item)
+                    source.upNext(item)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     null
                 }
+            upNext = next?.title
+            upNextPicture = next?.picture
         }
     }
+
+    /** Whether the stream's quality can be chosen, as Jellyfin's can. */
+    val canChooseQuality: Boolean
+        get() = item != null && source.hasQualities
+
+    /** Streams at [quality] from now on, and loads what plays again at it, from the same moment. */
+    fun changeQuality(quality: StreamQuality) {
+        if (settings.streamQuality == quality.key) return
+        settings.streamQuality = quality.key
+        val current = item ?: return
+        val at = position
+        scope.launch {
+            try {
+                val again = source.reload(current, at) ?: return@launch
+                item = again
+                started = null
+                startIfReady()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = errorText(e)
+            }
+        }
+    }
+
+    /** Whether the picture is zoomed to fill the window, cutting off its edges, or shown whole. */
+    var fills by mutableStateOf(false)
+        private set
+
+    fun toggleFill() {
+        fills = !fills
+        player?.set("panscan", if (fills) "1.0" else "0.0")
+    }
+
+    /** Called when mpv was stopped from outside, such as with the keyboard's Stop key. */
+    var onStopped: (() -> Unit)? = null
 
     /** Adds the subtitle files next to the video, once it has loaded, and says it started. */
     fun onFileLoaded() {
@@ -591,6 +646,11 @@ internal class PlayerSession(
             reportProgress(position, paused = false)
         }
         checkSleep(player, now)
+        if (error == null && player.getFlag("idle-active")) {
+            // Stopped from outside, such as with the keyboard's Stop key: there's nothing loaded
+            onStopped?.invoke()
+            return
+        }
         val atEnd = player.getFlag("eof-reached")
         if (atEnd && !ended) {
             ended = true
@@ -693,7 +753,8 @@ internal class PlayerSession(
     fun release() {
         val player = player ?: return
         this.player = null
-        val last = player.getDouble("time-pos")
+        // Where mpv is, or where it last was when it has stopped already
+        val last = player.getDouble("time-pos") ?: position.takeIf { !loading && it > 0 }
         val current = item
         if (last != null && current != null) {
             val report = report(last, paused = true)
@@ -767,7 +828,10 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
         }
     }
 
-    LaunchedEffect(session) { session.load() }
+    LaunchedEffect(session) {
+        session.onStopped = { close() }
+        session.load()
+    }
     LaunchedEffect(session, session.player, session.item) { session.startIfReady() }
     LaunchedEffect(session, session.player) {
         if (session.player == null) return@LaunchedEffect
@@ -1104,6 +1168,10 @@ private fun mpvOptions(settings: AppSettings): List<Pair<String, String>> = buil
     add("keep-open" to "yes")
     add("idle" to "yes")
     add("ytdl" to "no")
+    // What was just played stays loaded, so going back a little doesn't fetch it again
+    add("cache" to "yes")
+    add("demuxer-seekable-cache" to "yes")
+    add("demuxer-max-back-bytes" to "96MiB")
     add("hwdec" to settings.hardwareDecoding)
     add("osd-font-size" to "38")
     add("cursor-autohide" to "1000")

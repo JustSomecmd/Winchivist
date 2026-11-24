@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import dev.jdtech.tubedroid.desktop.AppSettings
 import dev.jdtech.tubedroid.desktop.LocalApp
 import dev.jdtech.tubedroid.desktop.jrwi.jrwiErrorText
+import dev.jdtech.tubedroid.desktop.player.StreamQuality
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
 import dev.jdtech.tubedroid.desktop.ui.ColumnScrollbar
 import dev.jdtech.tubedroid.desktop.ui.PageBar
@@ -441,6 +442,27 @@ private fun PlaybackSettings(settings: AppSettings) {
             ),
         selected = settings.sponsorBlock,
         onSelect = { settings.sponsorBlock = it },
+    )
+    ChoiceRow(
+        title = "Intros and credits",
+        subtitle = "For Jellyfin's movies and episodes it knows the intro, recap or credits of",
+        options =
+            listOf(
+                AppSettings.SPONSORBLOCK_BUTTON to "Show a skip button",
+                AppSettings.SPONSORBLOCK_AUTO to "Skip automatically",
+                AppSettings.SPONSORBLOCK_OFF to "Off",
+            ),
+        selected = settings.mediaSegments,
+        onSelect = { settings.mediaSegments = it },
+    )
+    ChoiceRow(
+        title = "Streaming quality",
+        subtitle =
+            "For Jellyfin. Below Original, Jellyfin converts the video, which suits a slow " +
+                "connection. It can be changed while a video plays, too",
+        options = StreamQuality.entries.map { it.key to it.label },
+        selected = settings.streamQuality,
+        onSelect = { settings.streamQuality = it },
     )
     ChoiceRow(
         title = "Hardware decoding",

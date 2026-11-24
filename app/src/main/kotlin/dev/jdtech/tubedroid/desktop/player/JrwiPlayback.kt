@@ -80,6 +80,9 @@ internal class JrwiPlaybackSource(
 
     override suspend fun nextTitle(current: PlayItem): String? = nextEpisode(current)?.title
 
+    override suspend fun upNext(current: PlayItem): UpNext? =
+        nextEpisode(current)?.let { UpNext(it.title, repository.api.fileUrl(it.thumbnail)) }
+
     override suspend fun next(current: PlayItem): PlayItem? {
         val next = nextEpisode(current) ?: return null
         // From where it was left, or else from its start
@@ -138,6 +141,17 @@ internal class JrwiLinkedSource(
 
     override suspend fun playlistItem(videoId: String): PlayItem? =
         inner.playlistItem(videoId)?.let { link(it, resume = true) }
+
+    /** The same thing again, still the archive's episode it was. */
+    override suspend fun reload(current: PlayItem, seconds: Double): PlayItem? =
+        inner
+            .reload(current, seconds)
+            ?.copy(
+                jrwi = current.jrwi,
+                jrwiAudio = current.jrwiAudio,
+                transcriptPost = current.transcriptPost,
+                route = current.route,
+            )
 
     private suspend fun link(play: PlayItem, resume: Boolean): PlayItem {
         val match =
@@ -211,7 +225,7 @@ internal fun playbackSource(app: AppGraph, request: PlayerRequest): PlaybackSour
             }
         }
         is PlayerRequest.Jellyfin -> {
-            val plain = JellyfinPlaybackSource(app.jellyfin, request)
+            val plain = JellyfinPlaybackSource(app.jellyfin, app.settings, request)
             if (linked) {
                 JrwiLinkedSource(plain, app.jrwi, resume) { play ->
                     app.jrwi.itemForEpisode(UUID.fromString(play.id))?.let { item ->

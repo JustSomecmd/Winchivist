@@ -124,12 +124,28 @@ internal data class PlaybackReport(
     val duration: Double? = null,
 )
 
+/** What plays next: its title, and its picture where there is one. */
+internal data class UpNext(val title: String, val picture: String?)
+
 /** Where the player's videos come from, and where it reports back to: TubeArchivist or Jellyfin. */
 internal interface PlaybackSource {
     suspend fun first(): PlayItem
 
     /** What plays after [current], if anything, by its title; the whole item loads when it's up. */
     suspend fun nextTitle(current: PlayItem): String?
+
+    /** What plays after [current], with its picture where there is one, for the Up next card. */
+    suspend fun upNext(current: PlayItem): UpNext? = nextTitle(current)?.let { UpNext(it, null) }
+
+    /** Whether the stream's quality can be chosen, which Jellyfin's can. */
+    val hasQualities: Boolean
+        get() = false
+
+    /**
+     * [current] again from [seconds] in, as the settings now say to stream it, such as after the
+     * quality was changed. Null when there's nothing to load again.
+     */
+    suspend fun reload(current: PlayItem, seconds: Double): PlayItem? = null
 
     suspend fun next(current: PlayItem): PlayItem?
 
@@ -229,6 +245,9 @@ internal class TaPlaybackSource(
 
     override suspend fun nextTitle(current: PlayItem): String? = nextVideo(current)?.title
 
+    override suspend fun upNext(current: PlayItem): UpNext? =
+        nextVideo(current)?.let { UpNext(it.title, api.mediaUrl(it.thumbUrl)) }
+
     override suspend fun next(current: PlayItem): PlayItem? {
         val next = nextVideo(current) ?: return null
         // Starting over plays each video from its start again
@@ -312,9 +331,16 @@ internal class TaPlaybackSource(
  */
 internal class JellyfinPlaybackSource(
     private val client: JellyfinClient,
+    private val settings: AppSettings,
     private val request: PlayerRequest.Jellyfin,
 ) : PlaybackSource {
     private val items = mutableMapOf<String, BaseItemDto>()
+
+    override val hasQualities: Boolean
+        get() = true
+
+    override suspend fun reload(current: PlayItem, seconds: Double): PlayItem? =
+        items[current.id]?.toPlayItem(fromStart = false, startAt = seconds)
 
     /** How each item plays, from what Jellyfin said: its file, play session and tracks. */
     private class Playing(
@@ -324,6 +350,8 @@ internal class JellyfinPlaybackSource(
         val audioIndexes: List<Int>,
         /** Jellyfin's number for each subtitle track, in mpv's order: the file's, then the rest. */
         val subtitleIndexes: List<Int>,
+        /** Jellyfin converts it to a lower quality, with one sound track and subtitles as files. */
+        val converted: Boolean = false,
     )
 
     private val playing = mutableMapOf<String, Playing>()
@@ -345,6 +373,9 @@ internal class JellyfinPlaybackSource(
 
     override suspend fun nextTitle(current: PlayItem): String? =
         nextEpisode(current)?.let { episodeTitle(it) }
+
+    override suspend fun upNext(current: PlayItem): UpNext? =
+        nextEpisode(current)?.let { UpNext(episodeTitle(it), it.picture()) }
 
     override suspend fun next(current: PlayItem): PlayItem? {
         val next = nextEpisode(current) ?: return null
@@ -383,6 +414,7 @@ internal class JellyfinPlaybackSource(
             subtitleStreamIndex =
                 if (report.subtitleId == null) -1
                 else info?.subtitleIndexes?.getOrNull(report.subtitleId - 1),
+            converted = info?.converted == true,
         )
     }
 
@@ -409,6 +441,57 @@ internal class JellyfinPlaybackSource(
         }
         val audioIndexes = audio.map { it.index }
         val subtitleIndexes = (inFile + separate).map { it.index }
+
+        // A lower quality is Jellyfin's to make: one stream with the sound track its settings
+        // pick, and the subtitles as files. When the server offers none, the file plays as it is
+        val quality = StreamQuality.fromKey(settings.streamQuality)
+        val converted =
+            if (quality == StreamQuality.ORIGINAL) {
+                null
+            } else {
+                try {
+                    client.convertedStream(id, sourceId, quality, source.defaultAudioStreamIndex)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    System.err.println("Jellyfin gave no converted stream: $e")
+                    null
+                }
+            }
+        if (converted != null) {
+            playing[id.toString()] =
+                Playing(
+                    mediaSourceId = sourceId,
+                    playSessionId = info.playSessionId,
+                    audioIndexes = listOfNotNull(source.defaultAudioStreamIndex),
+                    subtitleIndexes = converted.subtitles.map { it.index },
+                    converted = true,
+                )
+            return PlayItem(
+                id = id.toString(),
+                title = if (type == BaseItemKind.EPISODE) episodeTitle(this) else name.orEmpty(),
+                subtitle = seriesName ?: productionYear?.toString(),
+                url = converted.url,
+                header = client.authHeader,
+                resumeSeconds = resume,
+                subtitles =
+                    converted.subtitles.map { stream ->
+                        ExternalSubtitle(
+                            url = client.serverUrl(stream.deliveryUrl.orEmpty()),
+                            title =
+                                stream.displayTitle
+                                    ?: stream.title
+                                    ?: stream.language
+                                    ?: "Subtitles",
+                            language = stream.language,
+                        )
+                    },
+                segments = skipSegments(),
+                trickplay = trickplay(sourceId),
+                picture = picture(),
+                route = Route.JellyfinItem(id.toString()),
+            )
+        }
         playing[id.toString()] =
             Playing(sourceId, info.playSessionId, audioIndexes, subtitleIndexes)
 
@@ -452,9 +535,14 @@ internal class JellyfinPlaybackSource(
         client.imageUrl(id, ImageType.PRIMARY, imageTags?.get(ImageType.PRIMARY), PICTURE_WIDTH)
             ?: seriesId?.let { client.imageUrl(it, ImageType.PRIMARY, seriesPrimaryImageTag, 600) }
 
-    /** Intros, credits and the like that Jellyfin knows of, to skip with a button. */
-    private suspend fun BaseItemDto.skipSegments(): List<SkipSegment> =
-        try {
+    /**
+     * Intros, credits and the like that Jellyfin knows of, to skip with a button or without being
+     * asked, as the settings say.
+     */
+    private suspend fun BaseItemDto.skipSegments(): List<SkipSegment> {
+        if (settings.mediaSegments == AppSettings.SPONSORBLOCK_OFF) return emptyList()
+        val auto = settings.mediaSegments == AppSettings.SPONSORBLOCK_AUTO
+        return try {
             client.segments(id).mapNotNull { segment ->
                 val category =
                     when (segment.type) {
@@ -467,7 +555,7 @@ internal class JellyfinPlaybackSource(
                     }
                 val start = JellyfinClient.seconds(segment.startTicks)
                 val end = JellyfinClient.seconds(segment.endTicks)
-                if (end - start < 1.0) null else SkipSegment(start, end, category)
+                if (end - start < 1.0) null else SkipSegment(start, end, category, auto)
             }
         } catch (e: CancellationException) {
             throw e
@@ -475,6 +563,7 @@ internal class JellyfinPlaybackSource(
             // Older servers have none
             emptyList()
         }
+    }
 
     /** The smallest of the preview picture sizes, which is plenty for the seek bar. */
     private fun BaseItemDto.trickplay(sourceId: String): Trickplay? {

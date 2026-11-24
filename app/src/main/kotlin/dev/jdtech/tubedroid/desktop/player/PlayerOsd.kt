@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -73,6 +74,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import dev.jdtech.tubedroid.desktop.LocalApp
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiPurple
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.Tooltip
@@ -82,6 +84,8 @@ import java.awt.Toolkit
 import java.awt.image.BufferedImage
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
@@ -114,6 +118,16 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
                 // Barely there, so the clicks on the picture land here rather than on mpv
                 .background(Color.Black.copy(alpha = CLICK_CATCHER_ALPHA))
                 .onPointerEvent(PointerEventType.Move) {
+                    lastMove = System.currentTimeMillis()
+                    shown = true
+                }
+                .onPointerEvent(PointerEventType.Scroll) { event ->
+                    // The wheel sets the volume, unless a list under the mouse scrolled with it
+                    val change = event.changes.firstOrNull() ?: return@onPointerEvent
+                    val turned = change.scrollDelta.y
+                    if (change.isConsumed || turned == 0f) return@onPointerEvent
+                    val step = if (turned < 0) WHEEL_VOLUME_STEP else -WHEEL_VOLUME_STEP
+                    session.changeVolume((session.volume + step).coerceIn(0.0, 100.0))
                     lastMove = System.currentTimeMillis()
                     shown = true
                 }
@@ -288,6 +302,7 @@ internal fun OsdBottom(
                 onSeek = session::seekTo,
                 trickplay = session.item?.trickplay,
                 modifier = Modifier.weight(1f).padding(horizontal = Spacings.medium),
+                accent = barColor(session),
             )
             TimeText(formatDuration(session.duration.coerceAtLeast(0.0)))
         }
@@ -369,23 +384,7 @@ internal fun OsdBottom(
                         onMenu = onMenu,
                     )
                 }
-                TrackMenu(
-                    icon = "ic_settings",
-                    label = "Settings",
-                    options =
-                        PlayerSession.SPEEDS.map { speed ->
-                            MenuOption(
-                                "Speed ${speedLabel(speed)}",
-                                kotlin.math.abs(speed - session.speed) < 0.01,
-                            ) {
-                                session.changeSpeed(speed)
-                            }
-                        } +
-                            MenuOption("Playback info", session.statsShown, divided = true) {
-                                session.toggleStats()
-                            },
-                    onMenu = onMenu,
-                )
+                SettingsMenu(session = session, onMenu = onMenu)
                 OsdButton(
                     icon =
                         when {
@@ -400,6 +399,7 @@ internal fun OsdBottom(
                     value = if (session.muted) 0f else (session.volume / 100).toFloat(),
                     onChange = { session.changeVolume(it * 100.0) },
                     modifier = Modifier.width(96.dp),
+                    accent = barColor(session),
                 )
                 Spacer(Modifier.width(Spacings.small))
                 OsdButton(
@@ -440,30 +440,245 @@ internal fun OsdExtras(session: PlayerSession, modifier: Modifier = Modifier) {
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.94f),
-                modifier = Modifier.widthIn(max = 360.dp),
+                modifier = Modifier.widthIn(max = 460.dp),
             ) {
-                Column(modifier = Modifier.padding(Spacings.medium)) {
-                    Text(
-                        text = "Up next in $seconds s",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
-                        text = next,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp, bottom = Spacings.small),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(Spacings.small)) {
-                        Button(onClick = session::playNext) { Text("Play now") }
-                        TextButton(onClick = session::cancelUpNext) { Text("Cancel") }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(Spacings.medium),
+                    modifier = Modifier.padding(Spacings.medium),
+                ) {
+                    session.upNextPicture?.let { picture ->
+                        AsyncImage(
+                            model = picture,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier =
+                                Modifier.width(144.dp)
+                                    .aspectRatio(16f / 9f)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(SHADE),
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f, fill = false)) {
+                        Text(
+                            text = "Up next in $seconds s",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = barColor(session),
+                        )
+                        Text(
+                            text = next,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 4.dp, bottom = Spacings.small),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(Spacings.small)) {
+                            Button(onClick = session::playNext) { Text("Play now") }
+                            TextButton(onClick = session::cancelUpNext) { Text("Cancel") }
+                        }
                     }
                 }
             }
         }
     }
 }
+
+/**
+ * What the bars are drawn in: the archiver's purple for a JRWI episode, as in the phone app, and
+ * the app's accent for anything else.
+ */
+@Composable
+private fun barColor(session: PlayerSession): Color =
+    if (session.item?.jrwi != null) JrwiPurple.Accent else MaterialTheme.colorScheme.primary
+
+/** The settings menu's pages: the list of settings, or the choices of one of them. */
+private enum class SettingsPage {
+    MAIN,
+    SPEED,
+    QUALITY,
+    SLEEP,
+    CHAPTERS,
+}
+
+/**
+ * The player's settings, behind the cogwheel: the speed, the streaming quality for Jellyfin, a
+ * sleep timer and the chapters, each opening its choices in the menu's place, then autoplay,
+ * zooming the picture to fill the window, and mpv's playback info.
+ */
+@Composable
+private fun SettingsMenu(session: PlayerSession, onMenu: (open: Boolean) -> Unit) {
+    val settings = LocalApp.current.settings
+    var open by remember { mutableStateOf(false) }
+    var page by remember { mutableStateOf(SettingsPage.MAIN) }
+    fun setOpen(value: Boolean) {
+        if (value != open) onMenu(value)
+        if (value) page = SettingsPage.MAIN
+        open = value
+    }
+    Box {
+        OsdButton(icon = "ic_settings", label = "Settings", onClick = { setOpen(true) })
+        DropdownMenu(expanded = open, onDismissRequest = { setOpen(false) }) {
+            when (page) {
+                SettingsPage.MAIN -> {
+                    SettingRow("Speed", speedLabel(session.speed)) { page = SettingsPage.SPEED }
+                    if (session.canChooseQuality) {
+                        SettingRow("Quality", StreamQuality.fromKey(settings.streamQuality).label) {
+                            page = SettingsPage.QUALITY
+                        }
+                    }
+                    SettingRow("Sleep timer", sleepLabel(session.sleep)) {
+                        page = SettingsPage.SLEEP
+                    }
+                    if (session.chapters.size > 1) {
+                        SettingRow("Chapters", "${session.chapters.size}") {
+                            page = SettingsPage.CHAPTERS
+                        }
+                    }
+                    HorizontalDivider()
+                    ChoiceRow("Autoplay", settings.autoplay) {
+                        settings.autoplay = !settings.autoplay
+                    }
+                    ChoiceRow("Zoom to fill", session.fills) { session.toggleFill() }
+                    ChoiceRow("Playback info", session.statsShown) {
+                        session.toggleStats()
+                        setOpen(false)
+                    }
+                }
+                SettingsPage.SPEED -> {
+                    BackRow("Speed") { page = SettingsPage.MAIN }
+                    PlayerSession.SPEEDS.forEach { speed ->
+                        ChoiceRow(speedLabel(speed), abs(speed - session.speed) < 0.01) {
+                            session.changeSpeed(speed)
+                            setOpen(false)
+                        }
+                    }
+                }
+                SettingsPage.QUALITY -> {
+                    BackRow("Quality") { page = SettingsPage.MAIN }
+                    StreamQuality.entries.forEach { quality ->
+                        ChoiceRow(quality.label, settings.streamQuality == quality.key) {
+                            session.changeQuality(quality)
+                            setOpen(false)
+                        }
+                    }
+                }
+                SettingsPage.SLEEP -> {
+                    BackRow("Sleep timer") { page = SettingsPage.MAIN }
+                    ChoiceRow("Off", session.sleep == null) {
+                        session.cancelSleep()
+                        setOpen(false)
+                    }
+                    SLEEP_MINUTES.forEach { minutes ->
+                        ChoiceRow("$minutes minutes", false) {
+                            session.sleepIn(minutes)
+                            setOpen(false)
+                        }
+                    }
+                    ChoiceRow("The end of the video", session.sleep?.atEnd == true) {
+                        session.sleepAtEnd()
+                        setOpen(false)
+                    }
+                }
+                SettingsPage.CHAPTERS -> {
+                    BackRow("Chapters") { page = SettingsPage.MAIN }
+                    session.chapters.forEachIndexed { index, start ->
+                        val title = session.chapterTitles.getOrNull(index).orEmpty()
+                        val next = session.chapters.getOrNull(index + 1) ?: Double.MAX_VALUE
+                        ChoiceRow(
+                            text = "${formatDuration(start)}  $title",
+                            selected = session.position >= start && session.position < next,
+                        ) {
+                            session.seekTo(start)
+                            setOpen(false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** How a sleep timer stands, for the menu: off, the minutes left, or the end of the video. */
+private fun sleepLabel(sleep: PlayerSession.Sleep?): String {
+    val endsAt = sleep?.endsAt
+    return when {
+        sleep == null -> "Off"
+        endsAt == null -> "The end"
+        else -> {
+            val minutes = ceil((endsAt - System.currentTimeMillis()) / 60_000.0).toInt()
+            "${minutes.coerceAtLeast(1)} min"
+        }
+    }
+}
+
+/** A setting in the menu, with what it's set to, which opens its choices. */
+@Composable
+private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(text = title, modifier = Modifier.widthIn(min = 120.dp))
+                Spacer(Modifier.width(Spacings.medium))
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        trailingIcon = {
+            AppIcon(
+                name = "ic_chevron_right",
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+        },
+        onClick = onClick,
+    )
+}
+
+/** The top of a setting's choices: its name, which goes back to the list of settings. */
+@Composable
+private fun BackRow(title: String, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(text = title, fontWeight = FontWeight.SemiBold) },
+        leadingIcon = {
+            AppIcon(
+                name = "ic_chevron_left",
+                contentDescription = "Back",
+                modifier = Modifier.size(18.dp),
+            )
+        },
+        onClick = onClick,
+    )
+    HorizontalDivider()
+}
+
+/** One choice, or a setting that's on or off, ticked when it's the one in use. */
+@Composable
+private fun ChoiceRow(text: String, selected: Boolean, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(text = text, fontWeight = if (selected) FontWeight.SemiBold else null) },
+        leadingIcon = {
+            Box(Modifier.size(18.dp)) {
+                if (selected) {
+                    AppIcon(
+                        name = "ic_check",
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        },
+        onClick = onClick,
+    )
+}
+
+// As the phone app's video player offers
+private val SLEEP_MINUTES = listOf(10, 15, 30, 45, 60, 90)
+
+/** How much of the volume one notch of the mouse wheel is. */
+private const val WHEEL_VOLUME_STEP = 5.0
 
 /** A button of the controls: a white icon on the dark, which names itself on hover. */
 @Composable
