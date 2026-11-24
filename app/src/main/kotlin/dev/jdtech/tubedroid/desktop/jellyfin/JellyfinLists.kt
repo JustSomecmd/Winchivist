@@ -5,10 +5,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -23,6 +25,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -32,12 +36,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,6 +61,7 @@ import dev.jdtech.tubedroid.desktop.ui.ListScrollbar
 import dev.jdtech.tubedroid.desktop.ui.LoadMoreEffect
 import dev.jdtech.tubedroid.desktop.ui.PageBar
 import dev.jdtech.tubedroid.desktop.ui.PagePadding
+import dev.jdtech.tubedroid.desktop.ui.RoundIconButton
 import dev.jdtech.tubedroid.desktop.ui.SectionRow
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.errorText
@@ -73,7 +81,7 @@ import org.jellyfin.sdk.model.api.ImageType
 class JellyfinListModel(
     private val client: JellyfinClient,
     private val scope: CoroutineScope,
-    private val query: JellyfinClient.ItemQuery,
+    val query: JellyfinClient.ItemQuery,
 ) {
     val items = mutableStateListOf<BaseItemDto>()
     var total by mutableStateOf<Int?>(null)
@@ -150,6 +158,7 @@ private fun JellyfinGridPage(
             title = title + (model.total?.takeIf { it > 0 }?.let { " ($it)" } ?: ""),
             onBack = if (!root && canGoBack) navigator::back else null,
         ) {
+            if (model.query.sorted) JellyfinSortButtons(onChange = model::refresh)
             RefreshButton(onClick = model::refresh)
         }
         val wide = model.items.isNotEmpty() && model.items.all { it.type in WIDE_KINDS }
@@ -190,6 +199,57 @@ private fun JellyfinGridPage(
             GridScrollbar(model.gridState)
         }
     }
+}
+
+/**
+ * The order of Jellyfin's libraries, the same for each of them: what to order by, and a button that
+ * turns it round.
+ */
+@Composable
+internal fun JellyfinSortButtons(onChange: () -> Unit) {
+    val settings = LocalApp.current.settings
+    val current = JellyfinSort.fromKey(settings.jellyfinSort)
+    val descending = settings.jellyfinSortDescending
+    var open by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { open = true }) {
+            AppIcon(
+                name = "ic_arrow_down_up",
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(Modifier.width(Spacings.small))
+            Text(current.label)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            JellyfinSort.entries.forEach { sort ->
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            text = sort.label,
+                            fontWeight = if (sort == current) FontWeight.SemiBold else null,
+                        )
+                    },
+                    onClick = {
+                        open = false
+                        if (sort != current) {
+                            settings.jellyfinSort = sort.key
+                            onChange()
+                        }
+                    },
+                )
+            }
+        }
+    }
+    RoundIconButton(
+        icon = "ic_chevron_down",
+        label = if (descending) "Descending" else "Ascending",
+        onClick = {
+            settings.jellyfinSortDescending = !descending
+            onChange()
+        },
+        modifier = Modifier.rotate(if (descending) 0f else 180f),
+    )
 }
 
 /** Jellyfin's libraries, as it lists them for the user, each opening what it holds. */
@@ -272,10 +332,12 @@ class JellyfinLibrariesModel(
 /** What a library holds, by its kind, or what's in a collection, a playlist or a folder. */
 private fun folderQuery(route: Route.JellyfinFolder): JellyfinClient.ItemQuery {
     val parent = UUID.fromString(route.id)
-    fun all(kind: BaseItemKind) = JellyfinClient.ItemQuery(kinds = listOf(kind), parentId = parent)
+    fun all(kind: BaseItemKind, sorted: Boolean = false) =
+        JellyfinClient.ItemQuery(kinds = listOf(kind), parentId = parent, sorted = sorted)
     return when (route.collection) {
-        "movies" -> all(BaseItemKind.MOVIE)
-        "tvshows" -> all(BaseItemKind.SERIES)
+        // Movies and shows go by the order picked for libraries
+        "movies" -> all(BaseItemKind.MOVIE, sorted = true)
+        "tvshows" -> all(BaseItemKind.SERIES, sorted = true)
         "boxsets" -> all(BaseItemKind.BOX_SET)
         "playlists" -> all(BaseItemKind.PLAYLIST)
         else ->

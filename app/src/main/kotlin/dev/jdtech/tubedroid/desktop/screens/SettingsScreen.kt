@@ -54,6 +54,7 @@ import dev.jdtech.tubedroid.desktop.LocalApp
 import dev.jdtech.tubedroid.desktop.LocalNavigator
 import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.StartWithWindows
+import dev.jdtech.tubedroid.desktop.jellyfin.Languages
 import dev.jdtech.tubedroid.desktop.jrwi.jrwiErrorText
 import dev.jdtech.tubedroid.desktop.player.StreamQuality
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
@@ -77,6 +78,7 @@ import kotlinx.coroutines.withContext
 /** The settings in groups, each a tab at the top of the page. */
 internal enum class SettingsGroup(val label: String) {
     SERVERS("Servers"),
+    JELLYFIN("Jellyfin pages"),
     PLAYBACK("Playback"),
     NOTIFICATIONS("Notifications"),
     FILES("Files"),
@@ -145,8 +147,18 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit, onSkip: (() -> Unit)? 
                         ) {
                             when (settingsGroup) {
                                 SettingsGroup.SERVERS -> ServerGroup(settings, onDone)
+                                SettingsGroup.JELLYFIN -> {
+                                    SettingsSection("Home") { JellyfinHomeSettings(settings) }
+                                    SettingsSection("Shows and episodes") {
+                                        EpisodeSettings(settings)
+                                    }
+                                    SettingsSection("Movie, show and episode pages") {
+                                        JellyfinPageSettings(settings)
+                                    }
+                                }
                                 SettingsGroup.PLAYBACK -> {
                                     SettingsSection("Player") { PlaybackSettings(settings) }
+                                    SettingsSection("Languages") { LanguageSettings(settings) }
                                     SettingsSection("Skipping") { SkipSettings(settings) }
                                     SettingsSection("mpv") { MpvSettings(settings) }
                                 }
@@ -495,6 +507,24 @@ private fun PlaybackSettings(settings: AppSettings) {
         checked = settings.playerControlsOverVideo,
         onChange = { settings.playerControlsOverVideo = it },
     )
+    SwitchRow(
+        title = "Chapter marks",
+        subtitle = "Marks on the seek bar where chapters start",
+        checked = settings.chapterMarks,
+        onChange = { settings.chapterMarks = it },
+    )
+    SwitchRow(
+        title = "Seek previews",
+        subtitle = "Jellyfin's preview pictures above the seek bar, for videos that have them",
+        checked = settings.trickplay,
+        onChange = { settings.trickplay = it },
+    )
+    SwitchRow(
+        title = "Accent-coloured controls",
+        subtitle = "The video player's buttons in the accent colour rather than white",
+        checked = settings.accentControls,
+        onChange = { settings.accentControls = it },
+    )
     ChoiceRow(
         title = "Streaming quality",
         subtitle =
@@ -512,6 +542,199 @@ private fun PlaybackSettings(settings: AppSettings) {
         onSelect = { settings.hardwareDecoding = it },
     )
 }
+
+/** The rows of Jellyfin's Home, each of which can be left out. */
+@Composable
+private fun JellyfinHomeSettings(settings: AppSettings) {
+    if (!LocalApp.current.jellyfin.isSignedIn) {
+        Text(
+            text = "These count once Jellyfin is signed in to, under Servers.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    SwitchRow(
+        title = "Continue watching",
+        subtitle = "Movies and episodes started but not finished",
+        checked = settings.homeContinue,
+        onChange = { settings.homeContinue = it },
+    )
+    SwitchRow(
+        title = "Next up",
+        subtitle = "The next episode of each show being watched",
+        checked = settings.homeNextUp,
+        onChange = { settings.homeNextUp = it },
+    )
+    SwitchRow(
+        title = "Suggestions",
+        subtitle = "A few movies and shows Jellyfin picks",
+        checked = settings.homeSuggestions,
+        onChange = { settings.homeSuggestions = it },
+    )
+    SwitchRow(
+        title = "Latest",
+        subtitle = "What was added last, a row for each library",
+        checked = settings.homeLatest,
+        onChange = { settings.homeLatest = it },
+    )
+    SwitchRow(
+        title = "New episodes in Latest",
+        subtitle =
+            "Every new episode by itself with its own picture, rather than grouped under its " +
+                "show's poster",
+        checked = settings.homeLatestEpisodes && settings.homeLatest,
+        onChange = { settings.homeLatestEpisodes = it },
+        enabled = settings.homeLatest,
+    )
+}
+
+@Composable
+private fun EpisodeSettings(settings: AppSettings) {
+    SwitchRow(
+        title = "Every episode on show pages",
+        subtitle =
+            "One list of all of a show's episodes by date, newest or oldest first, in place of " +
+                "a season at a time",
+        checked = settings.allEpisodes,
+        onChange = { settings.allEpisodes = it },
+    )
+    SwitchRow(
+        title = "Hide episode numbers",
+        subtitle = "Episode names without the season and number in front, such as S1:E2",
+        checked = settings.hideEpisodeNumbers,
+        onChange = { settings.hideEpisodeNumbers = it },
+    )
+    SwitchRow(
+        title = "Episode name first",
+        subtitle = "On cards, the episode's name on top and its show's below it",
+        checked = settings.episodeTitleFirst,
+        onChange = { settings.episodeTitleFirst = it },
+    )
+}
+
+@Composable
+private fun JellyfinPageSettings(settings: AppSettings) {
+    SwitchRow(
+        title = "Cast and crew on movie pages",
+        subtitle = "A row of the people in it, each opening what else they're in",
+        checked = settings.castMovies,
+        onChange = { settings.castMovies = it },
+    )
+    SwitchRow(
+        title = "Cast and crew on show and episode pages",
+        subtitle = "The same row for shows and their episodes",
+        checked = settings.castShows,
+        onChange = { settings.castShows = it },
+    )
+    SwitchRow(
+        title = "File details",
+        subtitle =
+            "The file's size and its video, sound and subtitle tracks, on movie and " +
+                "episode pages",
+        checked = settings.extraInfo,
+        onChange = { settings.extraInfo = it },
+    )
+}
+
+/** The languages to play sound in and show subtitles in, ahead of Jellyfin's own choice. */
+@Composable
+private fun LanguageSettings(settings: AppSettings) {
+    LanguageRow(
+        title = "Sound",
+        subtitle =
+            "Played when a video has a sound track in it. Without one, or with none picked " +
+                "here, Jellyfin's own choice plays",
+        selected = settings.audioLanguage,
+        onSelect = { settings.audioLanguage = it },
+    )
+    LanguageRow(
+        title = "Subtitles",
+        subtitle =
+            "Shown when a video has subtitles in it. Without them, or with none picked here, " +
+                "Jellyfin's subtitle settings decide",
+        selected = settings.subtitleLanguage,
+        onSelect = { settings.subtitleLanguage = it },
+    )
+}
+
+/** A language picked from a list that narrows as its name is typed. */
+@Composable
+private fun LanguageRow(
+    title: String,
+    subtitle: String,
+    selected: String?,
+    onSelect: (String?) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    var typed by remember { mutableStateOf("") }
+    fun pick(code: String?) {
+        open = false
+        onSelect(code)
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(Spacings.default))
+        Box {
+            OutlinedButton(
+                onClick = {
+                    typed = ""
+                    open = true
+                }
+            ) {
+                Text(Languages.named(selected)?.name ?: NO_LANGUAGE)
+            }
+            DropdownMenu(
+                expanded = open,
+                onDismissRequest = { open = false },
+                modifier = Modifier.heightIn(max = 440.dp),
+            ) {
+                OutlinedTextField(
+                    value = typed,
+                    onValueChange = { typed = it },
+                    placeholder = { Text("Search") },
+                    singleLine = true,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp).width(240.dp),
+                )
+                val found =
+                    remember(typed) {
+                        Languages.all.filter { it.name.contains(typed.trim(), ignoreCase = true) }
+                    }
+                if (typed.isBlank()) {
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = NO_LANGUAGE,
+                                fontWeight = if (selected == null) FontWeight.SemiBold else null,
+                            )
+                        },
+                        onClick = { pick(null) },
+                    )
+                }
+                found.forEach { language ->
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = language.name,
+                                fontWeight =
+                                    if (language.code == selected) FontWeight.SemiBold else null,
+                            )
+                        },
+                        onClick = { pick(language.code) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+private const val NO_LANGUAGE = "Jellyfin's choice"
 
 @Composable
 private fun SkipSettings(settings: AppSettings) {
@@ -566,8 +789,9 @@ private fun NotificationSettings(settings: AppSettings) {
     val jellyfin = LocalApp.current.jellyfin.isSignedIn
     Text(
         text =
-            "Winchivist looks every 15 minutes while it runs and tells what it finds as a " +
-                "Windows notification. Its icon shows in the tray for that.",
+            "Shown as Windows notifications while Winchivist runs, with its icon in the tray " +
+                "for that. Jellyfin tells Winchivist the moment it adds something; " +
+                "TubeArchivist is asked every minute.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

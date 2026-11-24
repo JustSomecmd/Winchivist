@@ -43,7 +43,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -228,6 +230,17 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
  */
 @Composable
 internal fun OsdTop(session: PlayerSession, actions: PlayerActions, modifier: Modifier = Modifier) {
+    CompositionLocalProvider(LocalOsdAccent provides osdAccent(session)) {
+        OsdTopRow(session, actions, modifier)
+    }
+}
+
+@Composable
+private fun OsdTopRow(
+    session: PlayerSession,
+    actions: PlayerActions,
+    modifier: Modifier = Modifier,
+) {
     val item = session.item
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.fillMaxWidth()) {
         OsdButton(icon = "ic_arrow_left", label = "Back", onClick = actions.onClose)
@@ -291,6 +304,17 @@ internal fun OsdBottom(
     onMenu: (open: Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    CompositionLocalProvider(LocalOsdAccent provides osdAccent(session)) {
+        OsdBottomRows(session, onMenu, modifier)
+    }
+}
+
+@Composable
+private fun OsdBottomRows(
+    session: PlayerSession,
+    onMenu: (open: Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val settings = LocalApp.current.settings
     Column(modifier = modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -298,9 +322,9 @@ internal fun OsdBottom(
             SeekBar(
                 position = session.position,
                 duration = session.duration,
-                chapters = session.chapters,
+                chapters = if (settings.chapterMarks) session.chapters else emptyList(),
                 onSeek = session::seekTo,
-                trickplay = session.item?.trickplay,
+                trickplay = session.item?.trickplay?.takeIf { settings.trickplay },
                 modifier = Modifier.weight(1f).padding(horizontal = Spacings.medium),
                 accent = barColor(session),
             )
@@ -489,6 +513,16 @@ internal fun OsdExtras(session: PlayerSession, modifier: Modifier = Modifier) {
 @Composable
 private fun barColor(session: PlayerSession): Color =
     if (session.item?.jrwi != null) JrwiPurple.Accent else MaterialTheme.colorScheme.primary
+
+/**
+ * The colour of the controls' buttons when Settings asks for the accent: the app's, or the
+ * archive's purple for a JRWI episode. Null leaves them white.
+ */
+internal val LocalOsdAccent = compositionLocalOf<Color?> { null }
+
+@Composable
+private fun osdAccent(session: PlayerSession): Color? =
+    if (LocalApp.current.settings.accentControls) barColor(session) else null
 
 /** The settings menu's pages: the list of settings, or the choices of one of them. */
 internal enum class SettingsPage {
@@ -706,10 +740,18 @@ internal fun OsdButton(
             contentAlignment = Alignment.Center,
             modifier = Modifier.size(size).clip(CircleShape).clickable(onClick = onClick),
         ) {
+            // White with the one that's on in the accent, or the other way round
+            val accent = LocalOsdAccent.current
             AppIcon(
                 name = icon,
                 contentDescription = label,
-                tint = if (lit) MaterialTheme.colorScheme.primary else Color.White,
+                tint =
+                    when {
+                        accent == null ->
+                            if (lit) MaterialTheme.colorScheme.primary else Color.White
+                        lit -> Color.White
+                        else -> accent
+                    },
                 modifier = Modifier.size(size * 0.5f),
             )
         }

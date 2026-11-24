@@ -35,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +49,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import dev.jdtech.tubedroid.desktop.AppGraph
+import dev.jdtech.tubedroid.desktop.AppSettings
 import dev.jdtech.tubedroid.desktop.Downloads
 import dev.jdtech.tubedroid.desktop.LocalApp
 import dev.jdtech.tubedroid.desktop.LocalCanGoBack
@@ -75,21 +77,33 @@ import dev.jdtech.tubedroid.desktop.ui.SectionRow
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.errorText
 import dev.jdtech.tubedroid.desktop.ui.formatDuration
+import dev.jdtech.tubedroid.desktop.ui.formatSize
 import java.io.File
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ImageType
+import org.jellyfin.sdk.model.api.LocationType
+import org.jellyfin.sdk.model.api.MediaStreamType
 
 // Home
 
 /** A row on Jellyfin's home: its title and what's in it. */
 class JellyfinRow(val title: String, val items: List<BaseItemDto>, val wide: Boolean)
 
-class JellyfinHomeModel(private val client: JellyfinClient, private val scope: CoroutineScope) {
+class JellyfinHomeModel(
+    private val client: JellyfinClient,
+    private val settings: AppSettings,
+    private val scope: CoroutineScope,
+) {
     var rows by mutableStateOf<List<JellyfinRow>>(emptyList())
         private set
 
@@ -99,43 +113,67 @@ class JellyfinHomeModel(private val client: JellyfinClient, private val scope: C
     var error by mutableStateOf<String?>(null)
         private set
 
+    /** The rows Settings asked for when Home was last loaded. */
+    var shownFor: List<Boolean> = wanted()
+        private set
+
     val listState = LazyListState()
 
     init {
         refresh()
     }
 
+    /** Which rows Settings asks for, to tell when Home has to be loaded again. */
+    fun wanted(): List<Boolean> =
+        listOf(
+            settings.homeContinue,
+            settings.homeNextUp,
+            settings.homeSuggestions,
+            settings.homeLatest,
+            settings.homeLatestEpisodes,
+        )
+
     fun refresh() {
         scope.launch {
             loading = true
             error = null
+            shownFor = wanted()
             try {
-                val found = mutableListOf<JellyfinRow>()
-                client
-                    .resume()
-                    .takeIf { it.isNotEmpty() }
-                    ?.let { found += JellyfinRow("Continue watching", it, wide = true) }
-                client
-                    .nextUp()
-                    .takeIf { it.isNotEmpty() }
-                    ?.let { found += JellyfinRow("Next up", it, wide = true) }
-                runCatching { client.suggestions() }
-                    .getOrNull()
-                    ?.takeIf { it.isNotEmpty() }
-                    ?.let { found += JellyfinRow("Suggestions", it, wide = false) }
-                client
-                    .libraries()
-                    .filter { it.isVideoLibrary() }
-                    .forEach { library ->
-                        val latest = runCatching {
-                            client.latest(library.id)
-                        }
-                            .getOrDefault(emptyList())
-                        if (latest.isNotEmpty()) {
-                            found += JellyfinRow("Latest in ${library.name}", latest, wide = false)
+                // Each row is a request of its own, and they're all made at once
+                rows = coroutineScope {
+                    val resume = async { if (settings.homeContinue) client.resume() else null }
+                    val nextUp = async { if (settings.homeNextUp) client.nextUp() else null }
+                    val suggestions = async {
+                        if (settings.homeSuggestions) orNothing { client.suggestions() } else null
+                    }
+                    val latest = async { if (settings.homeLatest) latest() else emptyList() }
+                    buildList<JellyfinRow> {
+                        resume
+                            .await()
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.let { add(JellyfinRow("Continue watching", it, wide = true)) }
+                        nextUp
+                            .await()
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.let { add(JellyfinRow("Next up", it, wide = true)) }
+                        suggestions
+                            .await()
+                            ?.takeIf { it.isNotEmpty() }
+                            ?.let { add(JellyfinRow("Suggestions", it, wide = false)) }
+                        latest.await().forEach { (library, items) ->
+                            if (items.isNotEmpty()) {
+                                add(
+                                    JellyfinRow(
+                                        title = "Latest in ${library.name}",
+                                        items = items,
+                                        // New episodes by themselves show their own pictures
+                                        wide = items.all { it.type == BaseItemKind.EPISODE },
+                                    )
+                                )
+                            }
                         }
                     }
-                rows = found
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -145,6 +183,28 @@ class JellyfinHomeModel(private val client: JellyfinClient, private val scope: C
             }
         }
     }
+
+    /** What's new in each library of videos, asked of them all at once. */
+    private suspend fun latest(): List<Pair<BaseItemDto, List<BaseItemDto>>> = coroutineScope {
+        val episodes = settings.homeLatestEpisodes
+        client
+            .libraries()
+            .filter { it.isVideoLibrary() }
+            .map { library ->
+                async { library to orNothing { client.latest(library.id, episodes) } }
+            }
+            .awaitAll()
+    }
+
+    // A row that can't be read is left out rather than taking Home with it
+    private suspend fun orNothing(load: suspend () -> List<BaseItemDto>): List<BaseItemDto> =
+        try {
+            load()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptyList()
+        }
 }
 
 /** Jellyfin's home: what to carry on with, the next episodes, and what's new per library. */
@@ -152,7 +212,20 @@ class JellyfinHomeModel(private val client: JellyfinClient, private val scope: C
 fun JellyfinHomeScreen() {
     val app = LocalApp.current
     val model =
-        rememberPageModel("jellyfin_home") { scope -> JellyfinHomeModel(app.jellyfin, scope) }
+        rememberPageModel("jellyfin_home") { scope ->
+            JellyfinHomeModel(app.jellyfin, app.settings, scope)
+        }
+    // Rows switched on or off in Settings show the next time Home does
+    val wanted = model.wanted()
+    LaunchedEffect(wanted) { if (model.shownFor != wanted) model.refresh() }
+    // While it's open, Home follows the library as Jellyfin says it changes, once a run of
+    // changes is over
+    LaunchedEffect(Unit) {
+        app.jellyfin.libraryChanges().collectLatest {
+            delay(LIBRARY_CHANGE_DELAY_MS)
+            model.refresh()
+        }
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         PageBar(title = "Jellyfin", onBack = null) { RefreshButton(onClick = model::refresh) }
         if (model.rows.isEmpty()) {
@@ -188,9 +261,11 @@ fun JellyfinHomeScreen() {
     }
 }
 
+private const val LIBRARY_CHANGE_DELAY_MS = 1_500L
+
 // Libraries
 
-/** Every movie or show, a page at a time, by name. */
+/** Every movie or show, a page at a time, in the order picked for libraries. */
 class JellyfinLibraryModel(
     private val client: JellyfinClient,
     private val scope: CoroutineScope,
@@ -256,6 +331,7 @@ fun JellyfinLibraryScreen(movies: Boolean) {
             title = (if (movies) "Movies" else "Shows") + (model.total?.let { " ($it)" } ?: ""),
             onBack = null,
         ) {
+            JellyfinSortButtons(onChange = model::refresh)
             RefreshButton(onClick = model::refresh)
         }
         Box(modifier = Modifier.fillMaxSize()) {
@@ -378,7 +454,8 @@ private fun downloadToPc(app: AppGraph, item: BaseItemDto): File {
             ?: "mkv"
     val name =
         if (item.type == BaseItemKind.EPISODE) {
-            listOfNotNull(item.seriesName, episodeTitle(item)).joinToString(" - ")
+            listOfNotNull(item.seriesName, episodeTitle(item, hideNumbers = false))
+                .joinToString(" - ")
         } else {
             item.name.orEmpty() + (item.productionYear?.let { " ($it)" } ?: "")
         }
@@ -394,9 +471,15 @@ private fun downloadToPc(app: AppGraph, item: BaseItemDto): File {
     return folder
 }
 
-/** Cast and crew in a row, each opening what else they're in. */
+/**
+ * Cast and crew in a row, each opening what else they're in. Settings can leave it out, for movies
+ * and for shows and their episodes apart.
+ */
 @Composable
 private fun PeopleRow(item: BaseItemDto) {
+    val settings = LocalApp.current.settings
+    val wanted = if (item.type == BaseItemKind.MOVIE) settings.castMovies else settings.castShows
+    if (!wanted) return
     val people = item.people?.takeIf { it.isNotEmpty() } ?: return
     SectionRow("Cast and crew", modifier = Modifier.padding(top = Spacings.default)) {
         items(people.take(PEOPLE_SHOWN)) { person -> PersonCard(person) }
@@ -404,6 +487,28 @@ private fun PeopleRow(item: BaseItemDto) {
 }
 
 private const val PEOPLE_SHOWN = 40
+
+/** The file's size and its video, sound and subtitle tracks, as Jellyfin names them. */
+@Composable
+private fun FileDetails(item: BaseItemDto) {
+    val source = item.mediaSources?.firstOrNull() ?: return
+    val streams = source.mediaStreams.orEmpty()
+    fun tracks(type: MediaStreamType): String? =
+        streams
+            .filter { it.type == type }
+            .mapNotNull { it.displayTitle }
+            .joinToString(", ")
+            .takeIf { it.isNotBlank() }
+    source.size?.let { DetailLine(label = "Size", value = formatSize(it, metric = true)) }
+    tracks(MediaStreamType.VIDEO)?.let { DetailLine(label = "Video", value = it) }
+    tracks(MediaStreamType.AUDIO)?.let { DetailLine(label = "Sound", value = it) }
+    tracks(MediaStreamType.SUBTITLE)?.let { DetailLine(label = "Subtitles", value = it) }
+}
+
+/** An episode's name as Settings wants it: with its season and number in front, or without. */
+@Composable
+private fun episodeName(item: BaseItemDto): String =
+    episodeTitle(item, LocalApp.current.settings.hideEpisodeNumbers)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -430,7 +535,7 @@ fun JellyfinItemScreen(itemId: String) {
                 modifier = Modifier.verticalScroll(model.scroll).padding(bottom = Spacings.large)
             ) {
                 DetailHeader(
-                    title = if (episode) episodeTitle(item) else item.name.orEmpty(),
+                    title = if (episode) episodeName(item) else item.name.orEmpty(),
                     info = itemInfo(item),
                     backdrop = {
                         JellyfinImage(
@@ -504,6 +609,7 @@ fun JellyfinItemScreen(itemId: String) {
                         item.genres
                             ?.takeIf { it.isNotEmpty() }
                             ?.let { DetailLine(label = "Genres", value = it.joinToString(", ")) }
+                        if (app.settings.extraInfo) FileDetails(item)
                         item.overview?.let { overview ->
                             Text(
                                 text = overview,
@@ -525,9 +631,19 @@ fun JellyfinItemScreen(itemId: String) {
 
 class JellyfinShowModel(
     private val client: JellyfinClient,
+    private val settings: AppSettings,
     private val scope: CoroutineScope,
     private val seriesId: String,
 ) {
+    /**
+     * Whether every episode is listed by date, as Settings asks, rather than a season at a time.
+     */
+    var allEpisodes by mutableStateOf(settings.allEpisodes)
+        private set
+
+    var newestFirst by mutableStateOf(settings.episodesNewestFirst)
+        private set
+
     var show by mutableStateOf<BaseItemDto?>(null)
         private set
 
@@ -561,15 +677,44 @@ class JellyfinShowModel(
             loading = true
             error = null
             try {
-                show = client.item(id)
-                seasons = client.seasons(id)
-                nextUp = runCatching { client.nextUp(id).firstOrNull() }.getOrNull()
-                // The season of the next episode, or else the first
-                val start =
-                    seasons.firstOrNull { it.id == nextUp?.seasonId }
-                        ?: seasons.firstOrNull { (it.indexNumber ?: 0) > 0 }
-                        ?: seasons.firstOrNull()
-                start?.let { select(it) }
+                val every = settings.allEpisodes
+                // The show, its seasons and its episodes don't wait for each other
+                coroutineScope {
+                    val showLoad = async { client.item(id) }
+                    val seasonsLoad = async { client.seasons(id) }
+                    val nextLoad = async {
+                        try {
+                            client.nextUp(id).firstOrNull()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                    val everyLoad = async { if (every) client.episodes(id) else null }
+                    show = showLoad.await()
+                    seasons = seasonsLoad.await()
+                    nextUp = nextLoad.await()
+                    val all = everyLoad.await()
+                    allEpisodes = all != null
+                    if (all != null) {
+                        season = null
+                        // Episodes Jellyfin knows of but has no file for are left out
+                        episodes =
+                            byDate(
+                                all.filter { it.locationType != LocationType.VIRTUAL },
+                                newestFirst,
+                            )
+                    }
+                }
+                if (!allEpisodes) {
+                    // The season of the next episode, or else the first
+                    val start =
+                        seasons.firstOrNull { it.id == nextUp?.seasonId }
+                            ?: seasons.firstOrNull { (it.indexNumber ?: 0) > 0 }
+                            ?: seasons.firstOrNull()
+                    start?.let { select(it) }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -591,6 +736,24 @@ class JellyfinShowModel(
                 onMessage(errorText(e))
             }
         }
+    }
+
+    /** Turns the list of every episode round, and remembers that for every show. */
+    fun flipOrder() {
+        newestFirst = !newestFirst
+        settings.episodesNewestFirst = newestFirst
+        if (allEpisodes) episodes = byDate(episodes, newestFirst)
+    }
+
+    // By release date; episodes of one day keep their season and number order, and those without
+    // a date go last
+    private fun byDate(all: List<BaseItemDto>, newestFirst: Boolean): List<BaseItemDto> {
+        val byNumber = compareBy<BaseItemDto>({ it.parentIndexNumber }, { it.indexNumber })
+        val (dated, undated) = all.partition { it.premiereDate != null }
+        val oldestFirst =
+            dated.sortedWith(compareBy<BaseItemDto> { it.premiereDate }.then(byNumber))
+        return (if (newestFirst) oldestFirst.reversed() else oldestFirst) +
+            undated.sortedWith(byNumber)
     }
 
     fun select(target: BaseItemDto) {
@@ -616,8 +779,11 @@ fun JellyfinShowScreen(seriesId: String) {
     val canGoBack = LocalCanGoBack.current
     val model =
         rememberPageModel("jellyfin_show") { scope ->
-            JellyfinShowModel(app.jellyfin, scope, seriesId)
+            JellyfinShowModel(app.jellyfin, app.settings, scope, seriesId)
         }
+    // Changed in Settings while the page was open: it follows
+    val every = app.settings.allEpisodes
+    LaunchedEffect(every) { if (model.allEpisodes != every && model.show != null) model.load() }
     Column(modifier = Modifier.fillMaxSize()) {
         PageBar(title = null, onBack = if (canGoBack) navigator::back else null)
         val show = model.show
@@ -653,7 +819,7 @@ fun JellyfinShowScreen(seriesId: String) {
                                 val next = model.nextUp
                                 DetailButton(
                                     icon = "ic_play",
-                                    label = next?.let { "Play ${episodeTitle(it)}" } ?: "Play",
+                                    label = next?.let { "Play ${episodeName(it)}" } ?: "Play",
                                     onClick = {
                                         next?.let {
                                             navigator.play(PlayerRequest.Jellyfin(it.id.toString()))
@@ -690,7 +856,35 @@ fun JellyfinShowScreen(seriesId: String) {
                             },
                         )
                         PeopleRow(show)
-                        if (model.seasons.size > 1) {
+                        if (model.allEpisodes) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier =
+                                    Modifier.padding(
+                                        start = PagePadding,
+                                        end = PagePadding,
+                                        top = Spacings.large,
+                                        bottom = Spacings.small,
+                                    ),
+                            ) {
+                                Text(
+                                    text =
+                                        if (model.episodes.size == 1) "1 episode"
+                                        else "${model.episodes.size} episodes",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = model::flipOrder) {
+                                    AppIcon(
+                                        name = "ic_arrow_down_up",
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                    Spacer(Modifier.width(Spacings.small))
+                                    Text(if (model.newestFirst) "Newest first" else "Oldest first")
+                                }
+                            }
+                        } else if (model.seasons.size > 1) {
                             HeaderTabs(
                                 tabs = model.seasons.map { it.name.orEmpty() },
                                 selected =
@@ -744,7 +938,7 @@ private fun EpisodeRow(episode: BaseItemDto, modifier: Modifier = Modifier) {
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = episodeTitle(episode),
+                text = episodeName(episode),
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -799,9 +993,21 @@ fun WideCard(item: BaseItemDto, modifier: Modifier = Modifier) {
     val app = LocalApp.current
     val navigator = LocalNavigator.current
     val episode = item.type == BaseItemKind.EPISODE
+    // An episode shows its show's name on top, or its own when Settings says so
+    val titleFirst = app.settings.episodeTitleFirst
     MediaCard(
-        title = if (episode) item.seriesName.orEmpty() else item.name.orEmpty(),
-        subtitle = if (episode) episodeTitle(item) else item.productionYear?.toString(),
+        title =
+            when {
+                !episode -> item.name.orEmpty()
+                titleFirst -> episodeName(item)
+                else -> item.seriesName.orEmpty()
+            },
+        subtitle =
+            when {
+                !episode -> item.productionYear?.toString()
+                titleFirst -> item.seriesName
+                else -> episodeName(item)
+            },
         onClick = { navigator.open(item.route()) },
         onPlay =
             if (item.plays()) {

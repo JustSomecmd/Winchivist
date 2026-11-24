@@ -57,6 +57,52 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
     /** mpv's hardware decoding, as its hwdec option. */
     var hardwareDecoding: String by stored<String>("hwdec", "auto-safe")
 
+    /** Whether the seek bar marks where chapters start. */
+    var chapterMarks: Boolean by storedBoolean("chapter_marks", true)
+
+    /** Whether Jellyfin's preview pictures show above the seek bar. */
+    var trickplay: Boolean by storedBoolean("trickplay", true)
+
+    /** Whether the video player's buttons are in the accent colour rather than white. */
+    var accentControls: Boolean by storedBoolean("accent_controls", false)
+
+    /**
+     * The language to play sound in and to show subtitles in when a video has it, as a Language's
+     * code. Unset, Jellyfin's own choice for the user is followed.
+     */
+    var audioLanguage: String? by stored<String?>("audio_language", null)
+    var subtitleLanguage: String? by stored<String?>("subtitle_language", null)
+
+    /** The rows on Jellyfin's Home. */
+    var homeSuggestions: Boolean by storedBoolean("home_suggestions", true)
+    var homeContinue: Boolean by storedBoolean("home_continue", true)
+    var homeNextUp: Boolean by storedBoolean("home_next_up", true)
+    var homeLatest: Boolean by storedBoolean("home_latest", true)
+
+    /** Whether Home's Latest rows show every new episode by itself, not grouped under its show. */
+    var homeLatestEpisodes: Boolean by storedBoolean("home_latest_episodes", true)
+
+    /** Cast and crew on movie pages, and on show and episode pages. */
+    var castMovies: Boolean by storedBoolean("cast_movies", true)
+    var castShows: Boolean by storedBoolean("cast_shows", true)
+
+    /** Whether movie and episode pages tell the file's size and its tracks. */
+    var extraInfo: Boolean by storedBoolean("extra_info", false)
+
+    /** Whether a show's page lists every episode by date instead of a season at a time. */
+    var allEpisodes: Boolean by storedBoolean("all_episodes", false)
+    var episodesNewestFirst: Boolean by storedBoolean("episodes_newest_first", true)
+
+    /** Whether episode names leave out the season and number, such as "S1:E2". */
+    var hideEpisodeNumbers: Boolean by storedBoolean("hide_episode_numbers", false)
+
+    /** Whether cards show an episode's name above its show's, rather than below. */
+    var episodeTitleFirst: Boolean by storedBoolean("episode_title_first", false)
+
+    /** How Jellyfin's libraries are ordered, as a JellyfinSort's key, and in which direction. */
+    var jellyfinSort: String by stored<String>("jellyfin_sort", "name")
+    var jellyfinSortDescending: Boolean by storedBoolean("jellyfin_sort_descending", false)
+
     /** A Windows notification when a movie or an episode is new on Jellyfin. */
     var notifyNewItems: Boolean by storedBoolean("notify_new_items", true)
 

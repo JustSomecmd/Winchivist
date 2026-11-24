@@ -9,28 +9,87 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeParseException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 
 /**
- * What Winchivist looks for by itself every 15 minutes while it runs, as the phone app does in the
- * background: movies and episodes new on Jellyfin, and YouTube's bot detection stopping one of
- * TubeArchivist's tasks. Each has its own switch in Settings. What's found is told as a Windows
- * notification.
+ * What Winchivist looks for by itself while it runs, as the phone app does in the background:
+ * movies and episodes new on Jellyfin, and YouTube's bot detection stopping one of TubeArchivist's
+ * tasks. Each has its own switch in Settings. What's found is told as a Windows notification.
+ *
+ * Jellyfin says so itself when its library changes, so a new item is told about at once.
+ * TubeArchivist tells nothing by itself, and is asked every minute.
  */
 class BackgroundChecks(private val app: AppGraph) {
+    // One check for new items at a time, as they share what's remembered
+    private val newItems = Mutex()
 
-    /** Checks now and then every 15 minutes, until cancelled, telling [notify] what's new. */
+    /** Listens and looks until cancelled, telling [notify] what's new. */
     suspend fun run(notify: (title: String, text: String) -> Unit) {
-        // Not in the way of the app starting up
-        delay(FIRST_AFTER_MS)
-        while (true) {
-            quietly { if (app.settings.notifyNewItems) checkNewItems(notify) }
-            quietly { if (app.settings.notifyBots) checkBots(notify) }
-            delay(EVERY_MS)
+        coroutineScope {
+            // The moment Jellyfin says it added something. A scan adds several in a row, so it's
+            // given a few seconds, and what's added meanwhile is looked for once more after
+            launch {
+                while (true) {
+                    app.jellyfin
+                        .libraryChanges()
+                        .filter { it.added }
+                        .conflate()
+                        .collect {
+                            delay(ADDED_SETTLE_MS)
+                            lookForNewItems(notify)
+                        }
+                    // The connection gave up: it's listened to again in a while
+                    delay(LISTEN_AGAIN_MS)
+                }
+            }
+            // And every 15 minutes all the same, for what a dropped connection missed
+            launch {
+                // Not in the way of the app starting up
+                delay(FIRST_AFTER_MS)
+                while (true) {
+                    lookForNewItems(notify)
+                    delay(NEW_ITEMS_EVERY_MS)
+                }
+            }
+            launch {
+                delay(FIRST_AFTER_MS)
+                while (true) {
+                    lookForBots(notify)
+                    delay(BOTS_EVERY_MS)
+                }
+            }
         }
+    }
+
+    // TubeArchivist answers with an error while it has no results, so the same one isn't written
+    // down every minute
+    private var botError: String? = null
+
+    private suspend fun lookForBots(notify: (String, String) -> Unit) {
+        if (!app.settings.notifyBots) return
+        try {
+            checkBots(notify)
+            botError = null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val text = e.toString()
+            if (text != botError) System.err.println("Bot detection check: $text")
+            botError = text
+        }
+    }
+
+    private suspend fun lookForNewItems(notify: (String, String) -> Unit) {
+        quietly { if (app.settings.notifyNewItems) newItems.withLock { checkNewItems(notify) } }
     }
 
     // A check that fails is tried again with the next one
@@ -80,7 +139,10 @@ class BackgroundChecks(private val app: AppGraph) {
         val single = added.singleOrNull()
         when {
             single != null && single.type == BaseItemKind.EPISODE ->
-                notify("New video from ${single.seriesName.orEmpty()}", episodeTitle(single))
+                notify(
+                    "New video from ${single.seriesName.orEmpty()}",
+                    episodeTitle(single, app.settings.hideEpisodeNumbers),
+                )
             single != null -> notify("New movie", single.name.orEmpty())
             else ->
                 notify(
@@ -190,7 +252,10 @@ class BackgroundChecks(private val app: AppGraph) {
 
     private companion object {
         const val FIRST_AFTER_MS = 45_000L
-        const val EVERY_MS = 15 * 60_000L
+        const val NEW_ITEMS_EVERY_MS = 15 * 60_000L
+        const val BOTS_EVERY_MS = 60_000L
+        const val ADDED_SETTLE_MS = 5_000L
+        const val LISTEN_AGAIN_MS = 5 * 60_000L
         const val CHECK_LIMIT = 100
         const val RESYNC_MS = 7L * 24 * 60 * 60 * 1000
         const val MAX_NAMES = 6

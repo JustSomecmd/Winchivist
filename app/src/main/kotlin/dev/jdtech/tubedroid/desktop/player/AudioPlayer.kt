@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.jdtech.jellyfin.jrwi.JrwiItem
 import dev.jdtech.tubedroid.desktop.AppGraph
+import dev.jdtech.tubedroid.desktop.jellyfin.Languages
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.TimeUnit
@@ -370,6 +371,7 @@ class AudioPlayer(private val app: AppGraph) {
         // Speeds up without changing the pitch, as mpv does by default, said here to be sure
         add("audio-pitch-correction" to "yes")
         add("speed" to String.format(Locale.ROOT, "%.2f", app.settings.audioSpeed))
+        Languages.forMpv(app.settings.audioLanguage)?.let { add("alang" to it) }
         add("media-controls" to "yes")
     }
 

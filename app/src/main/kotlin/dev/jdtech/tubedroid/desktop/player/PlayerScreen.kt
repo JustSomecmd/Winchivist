@@ -46,6 +46,7 @@ import dev.jdtech.tubedroid.desktop.LocalAppWindow
 import dev.jdtech.tubedroid.desktop.LocalNavigator
 import dev.jdtech.tubedroid.desktop.LocalWindowState
 import dev.jdtech.tubedroid.desktop.Route
+import dev.jdtech.tubedroid.desktop.jellyfin.Languages
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiTheme
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.TubedroidTheme
@@ -1173,6 +1174,9 @@ private fun mpvOptions(settings: AppSettings): List<Pair<String, String>> = buil
     add("demuxer-seekable-cache" to "yes")
     add("demuxer-max-back-bytes" to "96MiB")
     add("hwdec" to settings.hardwareDecoding)
+    // The languages picked in Settings, for the files whose tracks no server picks
+    Languages.forMpv(settings.audioLanguage)?.let { add("alang" to it) }
+    Languages.forMpv(settings.subtitleLanguage)?.let { add("slang" to it) }
     add("osd-font-size" to "38")
     add("cursor-autohide" to "1000")
     // Windows' media controls and the keyboard's media keys, which mpv leaves off inside an app

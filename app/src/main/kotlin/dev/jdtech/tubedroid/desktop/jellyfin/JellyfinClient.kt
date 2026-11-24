@@ -7,6 +7,9 @@ import dev.jdtech.tubedroid.desktop.player.StreamQuality
 import java.net.InetAddress
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.jellyfin.sdk.api.client.extensions.authenticationApi
@@ -19,6 +22,7 @@ import org.jellyfin.sdk.api.client.extensions.showApi
 import org.jellyfin.sdk.api.client.extensions.suggestionApi
 import org.jellyfin.sdk.api.client.extensions.userDataApi
 import org.jellyfin.sdk.api.client.extensions.userViewApi
+import org.jellyfin.sdk.api.sockets.subscribe
 import org.jellyfin.sdk.createJellyfin
 import org.jellyfin.sdk.model.ClientInfo
 import org.jellyfin.sdk.model.DeviceInfo
@@ -34,6 +38,7 @@ import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.ItemFields
 import org.jellyfin.sdk.model.api.ItemFilter
 import org.jellyfin.sdk.model.api.ItemSortBy
+import org.jellyfin.sdk.model.api.LibraryChangedMessage
 import org.jellyfin.sdk.model.api.MediaSegmentDto
 import org.jellyfin.sdk.model.api.MediaStream
 import org.jellyfin.sdk.model.api.MediaStreamProtocol
@@ -143,6 +148,27 @@ class JellyfinClient(private val settings: AppSettings) {
         api.update(accessToken = null)
     }
 
+    /**
+     * Tells each time the server says something was added to or taken out of its library, over the
+     * connection Jellyfin keeps open to its clients for that. The connection is held for as long as
+     * this is listened to, and made again by itself when it drops.
+     */
+    fun libraryChanges(): Flow<LibraryChange> =
+        api.webSocket
+            .subscribe<LibraryChangedMessage>()
+            .mapNotNull { message ->
+                val change = message.data ?: return@mapNotNull null
+                LibraryChange(
+                        added = change.itemsAdded.isNotEmpty(),
+                        removed = change.itemsRemoved.isNotEmpty(),
+                    )
+                    .takeIf { it.added || it.removed }
+            }
+            // Without it, what's new is still found by looking now and then
+            .catch { e -> System.err.println("Jellyfin's live updates: $e") }
+
+    class LibraryChange(val added: Boolean, val removed: Boolean)
+
     /** The user's libraries, such as Movies and Shows. */
     suspend fun libraries(): List<BaseItemDto> =
         withContext(Dispatchers.IO) { api.userViewApi.getUserViews(userId).content.items }
@@ -169,13 +195,33 @@ class JellyfinClient(private val settings: AppSettings) {
                 .items
         }
 
-    /** What was added to a library last. */
-    suspend fun latest(libraryId: UUID): List<BaseItemDto> =
+    /**
+     * What was added to a library last. With [episodes], every new episode by itself, newest first,
+     * rather than grouped under its show.
+     */
+    suspend fun latest(libraryId: UUID, episodes: Boolean): List<BaseItemDto> =
         withContext(Dispatchers.IO) {
-            api.libraryApi.getLatestMedia(userId, parentId = libraryId, limit = 16).content
+            api.libraryApi
+                .getLatestMedia(userId, parentId = libraryId, limit = 16, groupItems = !episodes)
+                .content
         }
 
-    /** One page of every movie or show, by name. Also gives how many there are in all. */
+    // The order the user picked for libraries, with the name deciding between equals so that
+    // pages don't repeat or skip any
+    private val librarySort: List<ItemSortBy>
+        get() =
+            listOf(JellyfinSort.fromKey(settings.jellyfinSort).by, ItemSortBy.SORT_NAME).distinct()
+
+    private val libraryOrder: List<SortOrder>
+        get() =
+            listOf(
+                    if (settings.jellyfinSortDescending) SortOrder.DESCENDING
+                    else SortOrder.ASCENDING,
+                    SortOrder.ASCENDING,
+                )
+                .take(librarySort.size)
+
+    /** One page of every movie or show, in the order picked. Also gives how many there are. */
     suspend fun items(
         kind: BaseItemKind,
         startIndex: Int,
@@ -188,8 +234,8 @@ class JellyfinClient(private val settings: AppSettings) {
                         userId,
                         includeItemTypes = listOf(kind),
                         recursive = true,
-                        sortBy = listOf(ItemSortBy.SORT_NAME),
-                        sortOrder = listOf(SortOrder.ASCENDING),
+                        sortBy = librarySort,
+                        sortOrder = libraryOrder,
                         startIndex = startIndex,
                         limit = limit,
                     )
@@ -200,7 +246,7 @@ class JellyfinClient(private val settings: AppSettings) {
     /**
      * Which of Jellyfin's items a list holds: of some kinds, inside a library, collection or
      * playlist, the favourites, what a search finds, or what someone is in. A playlist keeps its
-     * own order; the rest go by name.
+     * own order, a library ([sorted]) goes by the order picked for libraries, the rest by name.
      */
     data class ItemQuery(
         val kinds: List<BaseItemKind>? = null,
@@ -210,6 +256,7 @@ class JellyfinClient(private val settings: AppSettings) {
         val personId: UUID? = null,
         val recursive: Boolean = true,
         val byName: Boolean = true,
+        val sorted: Boolean = false,
     )
 
     /** One page of what [query] asks for, with how many there are in all. */
@@ -229,8 +276,18 @@ class JellyfinClient(private val settings: AppSettings) {
                         filters = if (query.favorites) listOf(ItemFilter.IS_FAVORITE) else null,
                         searchTerm = query.search,
                         personIds = query.personId?.let { listOf(it) },
-                        sortBy = if (query.byName) listOf(ItemSortBy.SORT_NAME) else null,
-                        sortOrder = if (query.byName) listOf(SortOrder.ASCENDING) else null,
+                        sortBy =
+                            when {
+                                query.sorted -> librarySort
+                                query.byName -> listOf(ItemSortBy.SORT_NAME)
+                                else -> null
+                            },
+                        sortOrder =
+                            when {
+                                query.sorted -> libraryOrder
+                                query.byName -> listOf(SortOrder.ASCENDING)
+                                else -> null
+                            },
                         startIndex = startIndex,
                         limit = limit,
                     )
@@ -690,3 +747,17 @@ private fun computerName(): String =
     System.getenv("COMPUTERNAME")
         ?: runCatching { InetAddress.getLocalHost().hostName }.getOrNull()
         ?: "Windows"
+
+/** The orders Jellyfin's libraries can be listed in. */
+enum class JellyfinSort(val key: String, val label: String, internal val by: ItemSortBy) {
+    NAME("name", "Title", ItemSortBy.SORT_NAME),
+    RATING("rating", "Rating", ItemSortBy.COMMUNITY_RATING),
+    PARENTAL("parental", "Age rating", ItemSortBy.OFFICIAL_RATING),
+    ADDED("added", "Date added", ItemSortBy.DATE_CREATED),
+    PLAYED("played", "Date played", ItemSortBy.DATE_PLAYED),
+    RELEASED("released", "Release date", ItemSortBy.PREMIERE_DATE);
+
+    companion object {
+        fun fromKey(key: String?): JellyfinSort = entries.firstOrNull { it.key == key } ?: NAME
+    }
+}

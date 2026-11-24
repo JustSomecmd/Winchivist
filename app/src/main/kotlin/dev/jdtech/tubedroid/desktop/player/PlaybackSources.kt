@@ -8,12 +8,14 @@ import dev.jdtech.tubedroid.desktop.AppSettings
 import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.WatchHistory
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinClient
+import dev.jdtech.tubedroid.desktop.jellyfin.Languages
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ImageType
 import org.jellyfin.sdk.model.api.MediaSegmentType
+import org.jellyfin.sdk.model.api.MediaStream
 import org.jellyfin.sdk.model.api.MediaStreamType
 
 /**
@@ -372,10 +374,12 @@ internal class JellyfinPlaybackSource(
     }
 
     override suspend fun nextTitle(current: PlayItem): String? =
-        nextEpisode(current)?.let { episodeTitle(it) }
+        nextEpisode(current)?.let { episodeTitle(it, settings.hideEpisodeNumbers) }
 
     override suspend fun upNext(current: PlayItem): UpNext? =
-        nextEpisode(current)?.let { UpNext(episodeTitle(it), it.picture()) }
+        nextEpisode(current)?.let {
+            UpNext(episodeTitle(it, settings.hideEpisodeNumbers), it.picture())
+        }
 
     override suspend fun next(current: PlayItem): PlayItem? {
         val next = nextEpisode(current) ?: return null
@@ -441,6 +445,25 @@ internal class JellyfinPlaybackSource(
         }
         val audioIndexes = audio.map { it.index }
         val subtitleIndexes = (inFile + separate).map { it.index }
+        val title =
+            if (type == BaseItemKind.EPISODE) episodeTitle(this, settings.hideEpisodeNumbers)
+            else name.orEmpty()
+
+        // A language picked in Settings comes before Jellyfin's own choice, when the file has it
+        val audioLanguage = Languages.code(settings.audioLanguage)
+        val audioIndex =
+            audio
+                .firstOrNull {
+                    audioLanguage != null && Languages.code(it.language) == audioLanguage
+                }
+                ?.index ?: source.defaultAudioStreamIndex
+        val subtitleLanguage = Languages.code(settings.subtitleLanguage)
+        fun wanted(tracks: List<MediaStream>): MediaStream? {
+            if (subtitleLanguage == null) return null
+            val inLanguage = tracks.filter { Languages.code(it.language) == subtitleLanguage }
+            // The whole of what's said, rather than only the signs and foreign lines
+            return inLanguage.firstOrNull { !it.isForced } ?: inLanguage.firstOrNull()
+        }
 
         // A lower quality is Jellyfin's to make: one stream with the sound track its settings
         // pick, and the subtitles as files. When the server offers none, the file plays as it is
@@ -450,7 +473,7 @@ internal class JellyfinPlaybackSource(
                 null
             } else {
                 try {
-                    client.convertedStream(id, sourceId, quality, source.defaultAudioStreamIndex)
+                    client.convertedStream(id, sourceId, quality, audioIndex)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -463,13 +486,13 @@ internal class JellyfinPlaybackSource(
                 Playing(
                     mediaSourceId = sourceId,
                     playSessionId = info.playSessionId,
-                    audioIndexes = listOfNotNull(source.defaultAudioStreamIndex),
+                    audioIndexes = listOfNotNull(audioIndex),
                     subtitleIndexes = converted.subtitles.map { it.index },
                     converted = true,
                 )
             return PlayItem(
                 id = id.toString(),
-                title = if (type == BaseItemKind.EPISODE) episodeTitle(this) else name.orEmpty(),
+                title = title,
                 subtitle = seriesName ?: productionYear?.toString(),
                 url = converted.url,
                 header = client.authHeader,
@@ -487,6 +510,11 @@ internal class JellyfinPlaybackSource(
                         )
                     },
                 segments = skipSegments(),
+                subtitleTrack =
+                    wanted(converted.subtitles)
+                        ?.let { converted.subtitles.indexOf(it) }
+                        ?.takeIf { it >= 0 }
+                        ?.plus(1),
                 trickplay = trickplay(sourceId),
                 picture = picture(),
                 route = Route.JellyfinItem(id.toString()),
@@ -497,7 +525,7 @@ internal class JellyfinPlaybackSource(
 
         return PlayItem(
             id = id.toString(),
-            title = if (type == BaseItemKind.EPISODE) episodeTitle(this) else name.orEmpty(),
+            title = title,
             subtitle = seriesName ?: productionYear?.toString(),
             url = client.streamUrl(id, sourceId, info.playSessionId),
             header = client.authHeader,
@@ -512,14 +540,14 @@ internal class JellyfinPlaybackSource(
                     )
                 },
             segments = skipSegments(),
-            // Jellyfin picks the tracks by the user's language and subtitle settings
-            audioTrack =
-                source.defaultAudioStreamIndex
-                    ?.let { audioIndexes.indexOf(it) }
-                    ?.takeIf { it >= 0 }
-                    ?.plus(1),
+            // Jellyfin picks the tracks by the user's language and subtitle settings there, unless
+            // a language is picked here
+            audioTrack = audioIndex?.let { audioIndexes.indexOf(it) }?.takeIf { it >= 0 }?.plus(1),
             subtitleTrack =
-                when (val index = source.defaultSubtitleStreamIndex) {
+                when (
+                    val index =
+                        wanted(inFile + separate)?.index ?: source.defaultSubtitleStreamIndex
+                ) {
                     null -> null
                     -1 -> 0
                     else -> subtitleIndexes.indexOf(index).takeIf { it >= 0 }?.plus(1)
@@ -567,6 +595,7 @@ internal class JellyfinPlaybackSource(
 
     /** The smallest of the preview picture sizes, which is plenty for the seek bar. */
     private fun BaseItemDto.trickplay(sourceId: String): Trickplay? {
+        if (!settings.trickplay) return null
         val sizes = trickplay?.get(sourceId) ?: trickplay?.values?.firstOrNull() ?: return null
         val info = sizes.values.minByOrNull { it.width } ?: return null
         if (info.thumbnailCount <= 0 || info.interval <= 0) return null
@@ -586,8 +615,9 @@ internal class JellyfinPlaybackSource(
 
 private const val PICTURE_WIDTH = 800
 
-/** Such as "S2:E5 · The Long Night". */
-internal fun episodeTitle(item: BaseItemDto): String {
+/** Such as "S2:E5 · The Long Night", or the name alone with [hideNumbers]. */
+internal fun episodeTitle(item: BaseItemDto, hideNumbers: Boolean): String {
+    if (hideNumbers) return item.name.orEmpty()
     val number =
         listOfNotNull(
                 item.parentIndexNumber?.let { "S$it" },
