@@ -1008,6 +1008,8 @@ private fun MpvVideo(
                                             is MpvEvent.LoadFailed ->
                                                 session.onLoadFailed(event.message)
                                             MpvEvent.Shutdown -> onShutdown()
+                                            // Only the audio player asks to be told
+                                            MpvEvent.AudioDevicesChanged -> {}
                                         }
                                     }
                                 },

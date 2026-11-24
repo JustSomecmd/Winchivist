@@ -193,7 +193,6 @@ internal object SampleArchive {
                 commentCount = 12 + index,
                 likeCount = 469 - index * 11,
                 archived = true,
-                transcript = true,
                 bodyHtml =
                     "<p>The crew sails into the storm, and <strong>nothing</strong> goes to plan.</p>" +
                         "<h3>In this episode</h3><ul><li>A deal with the harbour master</li>" +
