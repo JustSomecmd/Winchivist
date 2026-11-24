@@ -49,6 +49,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.jdtech.tubedroid.desktop.AppSettings
 import dev.jdtech.tubedroid.desktop.LocalApp
+import dev.jdtech.tubedroid.desktop.LocalNavigator
+import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.jrwi.jrwiErrorText
 import dev.jdtech.tubedroid.desktop.player.StreamQuality
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
@@ -114,6 +116,13 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit, onSkip: (() -> Unit)? 
                     ) {
                         SettingsSection("TubeArchivist") {
                             ServerForm(settings = settings, onSaved = onDone)
+                            if (settings.isConfigured) {
+                                // Kept on TubeArchivist's server, so on a page of their own
+                                val navigator = LocalNavigator.current
+                                TextButton(onClick = { navigator.open(Route.TaSettings) }) {
+                                    Text("TubeArchivist's own settings and schedules")
+                                }
+                            }
                         }
                         SettingsSection("JRWI archiver") { JrwiForm(settings) }
                         SettingsSection("Jellyfin") { JellyfinForm() }

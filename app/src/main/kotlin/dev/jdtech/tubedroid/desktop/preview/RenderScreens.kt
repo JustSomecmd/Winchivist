@@ -168,6 +168,9 @@ fun main(args: Array<String>) {
         capture("queue")
         shell.select(Section.SETTINGS)
         capture("settings")
+        shell.open(Route.TaSettings)
+        capture("ta-settings")
+        shell.back()
         // The JRWI archive's pages, from a made-up archiver
         shell.select(Section.JRWI_HOME)
         capture("jrwi-home")
@@ -651,6 +654,24 @@ private class SampleServer {
                     else -> null
                 }
             "user" -> """{"file_size_unit":"binary"}"""
+            // TubeArchivist's own settings, and when two of its tasks run
+            "appsettings" ->
+                """{"subscriptions":{"channel_size":50,"live_channel_size":50,""" +
+                    """"shorts_channel_size":50,"playlist_size":50,"auto_start":false,""" +
+                    """"extract_flat":false},"downloads":{"limit_speed":null,""" +
+                    """"sleep_interval":10,"autodelete_days":null,""" +
+                    """"format":"bestvideo[height<=1080]+bestaudio/best[height<=1080]",""" +
+                    """"format_sort":null,"add_metadata":true,"subtitle":"en",""" +
+                    """"subtitle_source":"auto","subtitle_index":false,"comment_max":null,""" +
+                    """"comment_sort":"top","integrate_sponsorblock":true,"integrate_ryd":false,""" +
+                    """"extractor_lang":null},"application":{"enable_snapshot":true}}"""
+            "task" ->
+                if (parts.getOrNull(2) == "schedule") {
+                    """[{"name":"update_subscribed","schedule":"0 8 *"},""" +
+                        """{"name":"check_reindex","schedule":"0 */6 *"}]"""
+                } else {
+                    null
+                }
             else -> null
         }
     }

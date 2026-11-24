@@ -79,6 +79,7 @@ import dev.jdtech.tubedroid.desktop.screens.SearchScreen
 import dev.jdtech.tubedroid.desktop.screens.SearchService
 import dev.jdtech.tubedroid.desktop.screens.SettingsScreen
 import dev.jdtech.tubedroid.desktop.screens.StatsScreen
+import dev.jdtech.tubedroid.desktop.screens.TaServerSettingsScreen
 import dev.jdtech.tubedroid.desktop.screens.VideoScreen
 import dev.jdtech.tubedroid.desktop.screens.VideosScreen
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
@@ -512,6 +513,7 @@ private fun PageContent(route: Route) {
         Route.JellyfinMovies -> JellyfinLibraryScreen(movies = true)
         Route.JellyfinShows -> JellyfinLibraryScreen(movies = false)
         Route.Settings -> SettingsScreen(firstRun = false, onDone = {})
+        Route.TaSettings -> TaServerSettingsScreen()
         is Route.Channel -> ChannelScreen(route.channelId)
         is Route.Video -> VideoScreen(route.videoId, route.playlistId)
         is Route.Playlist -> PlaylistScreen(route.playlistId)

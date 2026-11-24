@@ -29,6 +29,9 @@ sealed interface Route {
 
     data object Settings : Route
 
+    /** TubeArchivist's own settings and schedules, which are kept on its server. */
+    data object TaSettings : Route
+
     data class Channel(val channelId: String) : Route
 
     data class Video(val videoId: String, val playlistId: String? = null) : Route

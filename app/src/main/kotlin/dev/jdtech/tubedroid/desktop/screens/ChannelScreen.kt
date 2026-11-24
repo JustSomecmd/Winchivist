@@ -89,6 +89,8 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 enum class ChannelTab(val label: String, val videoType: String?) {
     VIDEOS("Videos", "videos"),
@@ -221,6 +223,43 @@ class ChannelModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {}
+        }
+    }
+
+    /** TubeArchivist's own settings, which the channel's replace; read when those show. */
+    var globalConfig by mutableStateOf<JsonObject?>(null)
+        private set
+
+    fun loadGlobalConfig() {
+        if (globalConfig != null) return
+        scope.launch {
+            try {
+                globalConfig = api.getConfig()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // The channel's settings show without what they replace
+            }
+        }
+    }
+
+    /**
+     * Changes one of the channel's own settings, or with null hands it back to the global one.
+     * Shown right away, and put back if TubeArchivist refuses it.
+     */
+    fun setOverwrite(key: String, value: JsonElement, onMessage: (String) -> Unit) {
+        val current = channel ?: return
+        val before = current.overwrites
+        channel = current.copy(overwrites = JsonObject(before.orEmpty() + (key to value)))
+        scope.launch {
+            try {
+                api.setChannelOverwrite(channelId, key, value)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                channel = channel?.copy(overwrites = before)
+                onMessage(errorText(e))
+            }
         }
     }
 
@@ -455,7 +494,10 @@ private fun ChannelServerSide(model: ChannelModel, channel: TaChannel) {
     var confirm by remember { mutableStateOf<VideoAction?>(null) }
     val list = model.serverVideos
     LoadMoreEffect(model.serverGrid) { list.loadMore() }
-    LaunchedEffect(Unit) { if (list.items.isEmpty()) list.loadMore() }
+    LaunchedEffect(Unit) {
+        if (list.items.isEmpty()) list.loadMore()
+        model.loadGlobalConfig()
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyVerticalGrid(
@@ -508,6 +550,25 @@ private fun ChannelServerSide(model: ChannelModel, channel: TaChannel) {
                                 Text("Refresh with videos")
                             }
                         }
+                    }
+                }
+            }
+            item(span = { GridItemSpan(maxLineSpan) }, key = "settings") {
+                SectionCard("Download settings") {
+                    Text(
+                        text =
+                            "These replace TubeArchivist's global settings for this channel only.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = Spacings.small),
+                    )
+                    TaChannelSettings.forEach { (key, setting) ->
+                        TaSettingRow(
+                            setting = setting,
+                            value = channel.overwrites?.get(key),
+                            onChange = { model.setOverwrite(key, it, navigator::message) },
+                            inherited = taValueText(setting, setting.read(model.globalConfig)),
+                        )
                     }
                 }
             }
