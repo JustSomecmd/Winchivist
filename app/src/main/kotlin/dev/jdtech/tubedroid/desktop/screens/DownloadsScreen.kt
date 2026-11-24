@@ -169,9 +169,14 @@ class QueueModel(private val api: TaApi, private val scope: CoroutineScope) {
 
 @Composable
 fun DownloadsScreen() {
+    val app = LocalApp.current
     val state = rememberPageModel("downloads") { LazyListState() }
     Column(modifier = Modifier.fillMaxSize()) {
-        PageBar(title = "Downloads", onBack = null)
+        PageBar(title = "Saved to this PC", onBack = null) {
+            if (app.downloads.items.any { !it.active }) {
+                TextButton(onClick = app.downloads::forgetFinished) { Text("Clear finished") }
+            }
+        }
         LocalDownloads(state)
     }
 }
@@ -193,7 +198,7 @@ fun QueueScreen() {
     }
 }
 
-/** The videos saved to this computer in this session. */
+/** What was saved to this computer in this session, and what's still on its way. */
 @Composable
 private fun LocalDownloads(state: LazyListState) {
     val app = LocalApp.current
@@ -211,7 +216,7 @@ private fun LocalDownloads(state: LazyListState) {
                     modifier = Modifier.padding(bottom = Spacings.small),
                 ) {
                     Text(
-                        text = "Videos are saved to ${app.settings.downloadFolder}",
+                        text = "Downloads are saved to ${app.settings.downloadFolder}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f),
@@ -231,18 +236,18 @@ private fun LocalDownloads(state: LazyListState) {
             if (items.isEmpty()) {
                 item(key = "empty") {
                     Text(
-                        text = "Nothing downloaded yet. A video's download button saves it here.",
+                        text = "Nothing downloaded yet. A page's download button saves to this PC.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = Spacings.large),
                     )
                 }
             }
-            items(items, key = { it.videoId }) { download ->
+            items(items, key = { it.id }) { download ->
                 LocalDownloadRow(
                     download = download,
-                    onOpen = { navigator.open(Route.Video(download.videoId)) },
-                    onCancel = { app.downloads.cancel(download.videoId) },
-                    onForget = { app.downloads.forget(download.videoId) },
+                    onOpen = download.route?.let { route -> { navigator.open(route) } },
+                    onCancel = { app.downloads.cancel(download.id) },
+                    onForget = { app.downloads.forget(download.id) },
                 )
             }
         }
@@ -253,7 +258,7 @@ private fun LocalDownloads(state: LazyListState) {
 @Composable
 private fun LocalDownloadRow(
     download: LocalDownload,
-    onOpen: () -> Unit,
+    onOpen: (() -> Unit)?,
     onCancel: () -> Unit,
     onForget: () -> Unit,
 ) {
@@ -274,6 +279,7 @@ private fun LocalDownloadRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 when (download.state) {
+                    LocalDownload.State.QUEUED -> Detail("Waiting for the downloads before it")
                     LocalDownload.State.RUNNING -> {
                         val progress = download.progress
                         if (progress != null) {
@@ -295,8 +301,9 @@ private fun LocalDownloadRow(
                 }
             }
             Spacer(Modifier.width(Spacings.medium))
-            TextButton(onClick = onOpen) { Text("Video page") }
+            if (onOpen != null) TextButton(onClick = onOpen) { Text("Its page") }
             when (download.state) {
+                LocalDownload.State.QUEUED,
                 LocalDownload.State.RUNNING -> TextButton(onClick = onCancel) { Text("Cancel") }
                 LocalDownload.State.DONE -> {
                     TextButton(

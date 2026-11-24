@@ -27,13 +27,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import dev.jdtech.jellyfin.tubearchivist.TaApi
 import dev.jdtech.jellyfin.tubearchivist.TaSearchResults
 import dev.jdtech.tubedroid.desktop.LocalApp
+import dev.jdtech.tubedroid.desktop.LocalCanGoBack
 import dev.jdtech.tubedroid.desktop.LocalNavigator
 import dev.jdtech.tubedroid.desktop.Route
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiColors
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiSearch
 import dev.jdtech.tubedroid.desktop.rememberPageModel
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
 import dev.jdtech.tubedroid.desktop.ui.ChannelItem
@@ -93,8 +97,55 @@ class SearchModel(private val api: TaApi, private val scope: CoroutineScope) {
     }
 }
 
+/** Which server a search looks in. */
+enum class SearchService(val label: String) {
+    TUBEARCHIVIST("TubeArchivist"),
+    JRWI("JRWI"),
+}
+
+/** Which server the search page looks in, kept while the page is in the history. */
+class SearchPageModel(start: SearchService) {
+    var service by mutableStateOf(start)
+}
+
+/**
+ * Search, of each server that's set up: a tab for each in the bar when there's more than one.
+ * [start] is the one to open on, [show] and [tag] what a search of the JRWI archive is kept to.
+ */
 @Composable
-fun SearchScreen() {
+fun SearchScreen(start: SearchService?, show: String? = null, tag: String? = null) {
+    val app = LocalApp.current
+    val navigator = LocalNavigator.current
+    val canGoBack = LocalCanGoBack.current
+    val services = buildList {
+        if (app.settings.isConfigured) add(SearchService.TUBEARCHIVIST)
+        if (app.settings.isJrwiConfigured) add(SearchService.JRWI)
+    }
+    val page =
+        rememberPageModel("search-service") {
+            SearchPageModel(start ?: services.firstOrNull() ?: SearchService.TUBEARCHIVIST)
+        }
+    val service = page.service.takeIf { it in services } ?: services.firstOrNull() ?: return
+    val bar: @Composable () -> Unit = {
+        PageBar(
+            title = "Search",
+            onBack = if (canGoBack) navigator::back else null,
+            tabs = if (services.size > 1) services.map { it.label } else emptyList(),
+            selectedTab = services.indexOf(service),
+            onTabSelected = { page.service = services[it] },
+            showSearch = false,
+            color = if (service == SearchService.JRWI) JrwiColors.Header else Color.Unspecified,
+        )
+    }
+    when (service) {
+        SearchService.TUBEARCHIVIST -> TaSearch(bar)
+        SearchService.JRWI -> JrwiSearch(bar = bar, show = show, tag = tag)
+    }
+}
+
+/** Search of TubeArchivist's videos, channels and playlists. */
+@Composable
+private fun TaSearch(bar: @Composable () -> Unit) {
     val app = LocalApp.current
     val navigator = LocalNavigator.current
     val model = rememberPageModel("search") { scope -> SearchModel(app.api, scope) }
@@ -102,7 +153,7 @@ fun SearchScreen() {
 
     // Laid out as Jellyfin's search: the box on top, then a row for each kind of result
     Column(modifier = Modifier.fillMaxSize()) {
-        PageBar(title = "Search", onBack = null)
+        bar()
         OutlinedTextField(
             value = model.query,
             onValueChange = model::onQueryChange,

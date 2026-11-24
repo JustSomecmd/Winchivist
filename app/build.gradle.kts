@@ -13,12 +13,15 @@ java { toolchain { languageVersion = Versions.JAVA } }
 
 dependencies {
     implementation(projects.tubearchivist)
+    implementation(projects.jrwi)
     implementation(compose.desktop.currentOs)
     implementation(libs.compose.mp.material3)
     implementation(libs.kotlinx.coroutines.swing)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
     implementation(libs.jna.platform)
+    // Reads the HTML of the JRWI archive's posts and comments
+    implementation(libs.jsoup)
     // Jellyfin's own library, as the phone app uses
     implementation(libs.jellyfin.core)
     // The Jellyfin library logs through SLF4J but leaves adding it to the app. Its logs aren't

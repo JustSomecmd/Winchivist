@@ -8,6 +8,9 @@ include(":app")
 // TubeArchivist's API and models, the same as in the phone app, Tubedroid
 include(":tubearchivist")
 
+// The JRWI archiver's API and models, the same as in the phone app
+include(":jrwi")
+
 pluginManagement {
     repositories {
         gradlePluginPortal()

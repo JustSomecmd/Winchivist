@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -54,6 +55,14 @@ import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinHomeScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinItemScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinLibraryScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinShowScreen
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiArchiverScreen
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiHomeScreen
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiItemScreen
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiPurple
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiSheetTheme
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiShowScreen
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiShowsScreen
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiStatsScreen
 import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 import dev.jdtech.tubedroid.desktop.player.PlayerScreen
 import dev.jdtech.tubedroid.desktop.screens.ChannelScreen
@@ -64,6 +73,7 @@ import dev.jdtech.tubedroid.desktop.screens.PlaylistScreen
 import dev.jdtech.tubedroid.desktop.screens.PlaylistsScreen
 import dev.jdtech.tubedroid.desktop.screens.QueueScreen
 import dev.jdtech.tubedroid.desktop.screens.SearchScreen
+import dev.jdtech.tubedroid.desktop.screens.SearchService
 import dev.jdtech.tubedroid.desktop.screens.SettingsScreen
 import dev.jdtech.tubedroid.desktop.screens.StatsScreen
 import dev.jdtech.tubedroid.desktop.screens.VideoScreen
@@ -93,6 +103,10 @@ class Shell : Navigator {
     var player by mutableStateOf<PlayerRequest?>(null)
         private set
 
+    /** What shows over the whole window, such as a post's pictures, or null. */
+    var overlay by mutableStateOf<(@Composable () -> Unit)?>(null)
+        private set
+
     val snackbar = SnackbarHostState()
 
     val current: PageEntry
@@ -116,6 +130,10 @@ class Shell : Navigator {
     }
 
     override fun back() {
+        if (overlay != null) {
+            overlay = null
+            return
+        }
         if (player != null) {
             player = null
             return
@@ -132,6 +150,22 @@ class Shell : Navigator {
         player = null
     }
 
+    override fun overlay(content: @Composable () -> Unit) {
+        overlay = content
+    }
+
+    override fun closeOverlay() {
+        overlay = null
+    }
+
+    /**
+     * Moves to a section that's there when the one showing isn't, such as before its server is set
+     * up or after signing out of it.
+     */
+    fun keepTo(available: List<Section>) {
+        if (section !in available) section = available.firstOrNull() ?: Section.SETTINGS
+    }
+
     override fun message(text: String) {
         scope.launch {
             snackbar.currentSnackbarData?.dismiss()
@@ -146,6 +180,8 @@ val LocalCanGoBack = staticCompositionLocalOf { false }
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ShellContent(shell: Shell) {
+    val available = availableSections(shell)
+    LaunchedEffect(available) { shell.keepTo(available) }
     CompositionLocalProvider(LocalNavigator provides shell) {
         Box(
             modifier =
@@ -159,7 +195,7 @@ fun ShellContent(shell: Shell) {
                 PlayerScreen(request = request, onClose = shell::closePlayer)
             } else {
                 Row(modifier = Modifier.fillMaxSize()) {
-                    Sidebar(shell)
+                    Sidebar(shell, available)
                     Surface(
                         color = MaterialTheme.colorScheme.background,
                         modifier = Modifier.weight(1f).fillMaxHeight(),
@@ -180,6 +216,7 @@ fun ShellContent(shell: Shell) {
                     }
                 }
             }
+            shell.overlay?.let { content -> Box(modifier = Modifier.fillMaxSize()) { content() } }
             SnackbarHost(
                 hostState = shell.snackbar,
                 modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
@@ -189,12 +226,38 @@ fun ShellContent(shell: Shell) {
 }
 
 /**
- * The sidebar, as Jellyfin's menu: the app's name at the top, Home, then TubeArchivist's and
- * Jellyfin's libraries under their names, the server's pages in the server's colors, and Settings
- * at the bottom.
+ * The sections there are to go to: each server's once it's set up, what was saved to this computer
+ * while there's anything to show, and Settings always.
  */
 @Composable
-private fun Sidebar(shell: Shell) {
+private fun availableSections(shell: Shell): List<Section> {
+    val app = LocalApp.current
+    val tubeArchivist = app.settings.isConfigured
+    val jrwi = app.settings.isJrwiConfigured
+    val jellyfin = app.jellyfin.isSignedIn
+    val downloads = app.downloads.items.isNotEmpty() || shell.section == Section.DOWNLOADS
+    return Section.entries.filter { section ->
+        when (section.group) {
+            RailGroup.TUBEARCHIVIST -> tubeArchivist
+            RailGroup.JRWI -> jrwi
+            RailGroup.JELLYFIN -> jellyfin
+            RailGroup.END ->
+                when (section) {
+                    Section.DOWNLOADS -> downloads
+                    Section.SEARCH -> tubeArchivist || jrwi
+                    else -> true
+                }
+        }
+    }
+}
+
+/**
+ * The sidebar: the app's name at the top, then each server's pages under its name and in its own
+ * colours (TubeArchivist's, the JRWI archiver's purple, and the app's accent for Jellyfin), with
+ * Search and Settings at the bottom.
+ */
+@Composable
+private fun Sidebar(shell: Shell, available: List<Section>) {
     val app = LocalApp.current
     val scope = rememberCoroutineScope()
     var updateOpen by remember { mutableStateOf(false) }
@@ -225,25 +288,29 @@ private fun Sidebar(shell: Shell) {
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
-        Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            SidebarItems(shell, RailGroup.TOP)
-            SidebarHeader("TubeArchivist")
-            SidebarItems(shell, RailGroup.TUBEARCHIVIST)
-            if (app.jellyfin.isSignedIn) {
-                SidebarHeader("Jellyfin")
-                SidebarItems(shell, RailGroup.JELLYFIN)
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
+        ) {
+            if (available.any { it.group == RailGroup.TUBEARCHIVIST }) {
+                // TubeArchivist's own colours, as its server's pages have them
+                ServerSideTheme(onServer = true) {
+                    SidebarGroup("TubeArchivist", MaterialTheme.colorScheme.surfaceContainerHigh) {
+                        SidebarItems(shell, available, RailGroup.TUBEARCHIVIST, inset = 0.dp)
+                    }
+                }
             }
-            // TubeArchivist itself, in the server's colors as its pages are
-            ServerSideTheme(onServer = true) {
-                Column(
-                    modifier =
-                        Modifier.padding(horizontal = 8.dp, vertical = 12.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .padding(vertical = 4.dp)
-                ) {
-                    SidebarHeader("Server", top = 6.dp)
-                    SidebarItems(shell, RailGroup.SERVER, inset = 0.dp)
+            if (available.any { it.group == RailGroup.JRWI }) {
+                JrwiSheetTheme {
+                    SidebarGroup("JRWI", JrwiPurple.Sheet) {
+                        SidebarItems(shell, available, RailGroup.JRWI, inset = 0.dp)
+                    }
+                }
+            }
+            if (available.any { it.group == RailGroup.JELLYFIN }) {
+                Column {
+                    SidebarHeader("Jellyfin", top = 6.dp)
+                    SidebarItems(shell, available, RailGroup.JELLYFIN)
                 }
             }
         }
@@ -275,16 +342,36 @@ private fun Sidebar(shell: Shell) {
                 )
             }
         }
-        SidebarItems(shell, RailGroup.END)
+        SidebarItems(shell, available, RailGroup.END)
         Spacer(Modifier.height(10.dp))
+    }
+}
+
+/** A server's pages in the sidebar, on a block of the server's own colour under its name. */
+@Composable
+private fun SidebarGroup(title: String, color: Color, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier =
+            Modifier.padding(horizontal = 8.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(color)
+                .padding(vertical = 4.dp)
+    ) {
+        SidebarHeader(title, top = 6.dp)
+        content()
     }
 }
 
 private val SIDEBAR_WIDTH = 232.dp
 
 @Composable
-private fun SidebarItems(shell: Shell, group: RailGroup, inset: Dp = 8.dp) {
-    Section.entries
+private fun SidebarItems(
+    shell: Shell,
+    available: List<Section>,
+    group: RailGroup,
+    inset: Dp = 8.dp,
+) {
+    available
         .filter { it.group == group }
         .forEach { section ->
             SidebarItem(
@@ -319,7 +406,7 @@ private fun SidebarItem(
                     else Color.Transparent
                 )
                 .clickable(onClick = onClick)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
     ) {
         AppIcon(
             name = icon,
@@ -394,7 +481,7 @@ private fun PageContent(route: Route) {
         Route.Channels -> ChannelsScreen()
         Route.Playlists -> PlaylistsScreen()
         Route.Downloads -> DownloadsScreen()
-        Route.Search -> SearchScreen()
+        Route.Search -> SearchScreen(start = null)
         Route.Stats -> StatsScreen()
         Route.Queue -> QueueScreen()
         Route.JellyfinHome -> JellyfinHomeScreen()
@@ -406,5 +493,13 @@ private fun PageContent(route: Route) {
         is Route.Playlist -> PlaylistScreen(route.playlistId)
         is Route.JellyfinItem -> JellyfinItemScreen(route.itemId)
         is Route.JellyfinShow -> JellyfinShowScreen(route.seriesId)
+        Route.JrwiHome -> JrwiHomeScreen()
+        Route.JrwiShows -> JrwiShowsScreen()
+        Route.JrwiArchiver -> JrwiArchiverScreen()
+        Route.JrwiStats -> JrwiStatsScreen()
+        is Route.JrwiShowPage -> JrwiShowScreen(route.showId)
+        is Route.JrwiPost -> JrwiItemScreen(route.postId)
+        is Route.JrwiSearch ->
+            SearchScreen(start = SearchService.JRWI, show = route.show, tag = route.tag)
     }
 }

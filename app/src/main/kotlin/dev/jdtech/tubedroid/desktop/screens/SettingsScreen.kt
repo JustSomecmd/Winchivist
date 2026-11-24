@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.jdtech.tubedroid.desktop.AppSettings
 import dev.jdtech.tubedroid.desktop.LocalApp
+import dev.jdtech.tubedroid.desktop.jrwi.jrwiErrorText
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
 import dev.jdtech.tubedroid.desktop.ui.ColumnScrollbar
 import dev.jdtech.tubedroid.desktop.ui.PageBar
@@ -67,7 +68,7 @@ import kotlinx.coroutines.launch
  * shell.
  */
 @Composable
-fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
+fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit, onSkip: (() -> Unit)? = null) {
     val settings = LocalApp.current.settings
     Surface(color = MaterialTheme.colorScheme.background, modifier = Modifier.fillMaxSize()) {
         if (firstRun) {
@@ -89,6 +90,12 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
                     )
                     Spacer(Modifier.height(Spacings.large))
                     ServerForm(settings = settings, onSaved = onDone)
+                    if (onSkip != null) {
+                        Spacer(Modifier.height(Spacings.medium))
+                        TextButton(onClick = onSkip) {
+                            Text("Set up Jellyfin or the JRWI archiver instead")
+                        }
+                    }
                 }
             }
         } else {
@@ -107,6 +114,7 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit) {
                         SettingsSection("TubeArchivist") {
                             ServerForm(settings = settings, onSaved = onDone)
                         }
+                        SettingsSection("JRWI archiver") { JrwiForm(settings) }
                         SettingsSection("Jellyfin") { JellyfinForm() }
                         SettingsSection("Downloads") { DownloadSettings(settings) }
                         SettingsSection("Playback") { PlaybackSettings(settings) }
@@ -247,10 +255,128 @@ private fun ServerForm(settings: AppSettings, onSaved: () -> Unit) {
     }
 }
 
+/**
+ * The JRWI archiver's address and API token, saved only once the archiver answers with them: its
+ * ping gives its version, and its status checks the token.
+ */
+@Composable
+private fun JrwiForm(settings: AppSettings) {
+    val api = LocalApp.current.jrwi.api
+    val scope = rememberCoroutineScope()
+    var url by remember { mutableStateOf(settings.jrwiUrl.orEmpty()) }
+    var token by remember { mutableStateOf(settings.jrwiToken.orEmpty()) }
+    var showToken by remember { mutableStateOf(false) }
+    var testing by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var failed by remember { mutableStateOf(false) }
+    val changed =
+        url.trim().trimEnd('/') != settings.jrwiUrl.orEmpty() ||
+            token.trim() != settings.jrwiToken.orEmpty()
+
+    fun connect() {
+        if (testing || url.isBlank() || token.isBlank()) return
+        testing = true
+        status = null
+        scope.launch {
+            try {
+                val version = api.check(url, token)
+                settings.jrwiUrl = url.trim().trimEnd('/')
+                settings.jrwiToken = token.trim()
+                failed = false
+                status = "Connected to the archiver" + (version?.let { " $it" } ?: "")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failed = true
+                status =
+                    if (e is IllegalArgumentException) "That address isn't valid"
+                    else jrwiErrorText(e)
+            } finally {
+                testing = false
+            }
+        }
+    }
+
+    Text(
+        text =
+            "The archiver keeps a copy of the members' area of jrwishow.com. With it connected, " +
+                "its shows, posts and comments are under JRWI in the bar on the left. Videos " +
+                "play through Jellyfin, and audio from the archiver.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    OutlinedTextField(
+        value = url,
+        onValueChange = { url = it },
+        label = { Text("Archiver address") },
+        placeholder = { Text("http://box:8090") },
+        singleLine = true,
+        keyboardOptions =
+            KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = token,
+        onValueChange = { token = it },
+        label = { Text("API token") },
+        supportingText = { Text("In the archiver's web app under Settings") },
+        singleLine = true,
+        visualTransformation =
+            if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+        trailingIcon = {
+            TextButton(onClick = { showToken = !showToken }) {
+                Text(if (showToken) "Hide" else "Show")
+            }
+        },
+        keyboardOptions =
+            KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { connect() }),
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Button(
+            onClick = ::connect,
+            enabled = !testing && url.isNotBlank() && token.isNotBlank() && changed,
+        ) {
+            Text(if (settings.isJrwiConfigured) "Save" else "Connect")
+        }
+        if (settings.isJrwiConfigured) {
+            Spacer(Modifier.width(Spacings.small))
+            OutlinedButton(
+                onClick = {
+                    settings.jrwiUrl = null
+                    settings.jrwiToken = null
+                    url = ""
+                    token = ""
+                    status = null
+                }
+            ) {
+                Text("Disconnect")
+            }
+        }
+        Spacer(Modifier.width(Spacings.medium))
+        if (testing) {
+            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+        } else {
+            status?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color =
+                        if (failed) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun DownloadSettings(settings: AppSettings) {
     Text(
-        text = "The download button saves videos straight to this folder.",
+        text =
+            "The download buttons save straight to this folder. What comes from the JRWI " +
+                "archive goes into a JRWI folder inside it.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

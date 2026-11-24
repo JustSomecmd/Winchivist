@@ -348,6 +348,8 @@ fun PageBar(
     selectedTab: Int = 0,
     onTabSelected: (Int) -> Unit = {},
     showSearch: Boolean = true,
+    /** The bar's own colour, where it isn't the page's. */
+    color: Color = Color.Unspecified,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val navigator = LocalNavigator.current
@@ -356,7 +358,9 @@ fun PageBar(
             modifier
                 .fillMaxWidth()
                 .height(HEADER_HEIGHT)
-                .background(MaterialTheme.colorScheme.background)
+                .background(
+                    if (color == Color.Unspecified) MaterialTheme.colorScheme.background else color
+                )
                 .padding(horizontal = Spacings.medium)
     ) {
         Row(

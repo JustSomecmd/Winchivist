@@ -3,6 +3,7 @@ package dev.jdtech.tubedroid.desktop
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.jdtech.jellyfin.jrwi.JrwiConfig
 import dev.jdtech.jellyfin.tubearchivist.TaConfig
 import java.io.File
 import java.util.prefs.Preferences
@@ -40,8 +41,26 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
     /** The accent preset, by the same names as the phone app. */
     var accent: String by stored<String>("accent", "tubearchivist")
 
+    /** Whether TubeArchivist is set up. */
     val isConfigured: Boolean
         get() = !url.isNullOrBlank() && !token.isNullOrBlank()
+
+    /** The JRWI archiver's address and API token, from its web app's Settings. */
+    var jrwiUrl: String? by stored<String?>("jrwi_url", null)
+    var jrwiToken: String? by stored<String?>("jrwi_token", null)
+
+    val isJrwiConfigured: Boolean
+        get() = !jrwiUrl.isNullOrBlank() && !jrwiToken.isNullOrBlank()
+
+    /** The archiver's address and token as its API reads them, each time they're needed. */
+    val jrwi: JrwiConfig =
+        object : JrwiConfig {
+            override val url: String?
+                get() = jrwiUrl
+
+            override val token: String?
+                get() = jrwiToken
+        }
 
     /** The Jellyfin server and the user signed in to it. The password itself isn't kept. */
     var jellyfinUrl: String? by stored<String?>("jellyfin_url", null)

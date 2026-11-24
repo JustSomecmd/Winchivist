@@ -1,7 +1,10 @@
 package dev.jdtech.tubedroid.desktop
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
@@ -29,7 +32,7 @@ val LocalAppWindow = staticCompositionLocalOf<java.awt.Window?> { null }
 
 fun main() {
     val graph = AppGraph(AppSettings())
-    installImageLoader(graph.api)
+    installImageLoader(graph.api, graph.jrwi.api)
 
     application {
         val windowState = rememberWindowState(width = 1360.dp, height = 860.dp)
@@ -53,6 +56,15 @@ fun main() {
                     false
                 }
             },
+            // Escape goes back too, once whatever has the focus, such as a menu, has let it pass
+            onKeyEvent = { event ->
+                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
+                    shell.back()
+                    true
+                } else {
+                    false
+                }
+            },
         ) {
             window.minimumSize = java.awt.Dimension(960, 600)
             CompositionLocalProvider(
@@ -61,11 +73,16 @@ fun main() {
                 LocalAppWindow provides window,
             ) {
                 TubedroidTheme(accent = graph.settings.accent) {
-                    if (graph.settings.isConfigured) {
+                    // The first start asks for TubeArchivist; the other servers are in Settings
+                    var skipped by remember { mutableStateOf(false) }
+                    val anySetUp =
+                        graph.settings.isConfigured ||
+                            graph.settings.isJrwiConfigured ||
+                            graph.jellyfin.isSignedIn
+                    if (anySetUp || skipped) {
                         ShellContent(shell)
                     } else {
-                        // The first start: TubeArchivist's address and token come first
-                        SettingsScreen(firstRun = true, onDone = {})
+                        SettingsScreen(firstRun = true, onDone = {}, onSkip = { skipped = true })
                     }
                 }
             }

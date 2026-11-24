@@ -44,6 +44,10 @@ import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.Section
 import dev.jdtech.tubedroid.desktop.Shell
 import dev.jdtech.tubedroid.desktop.ShellContent
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiPictures
+import dev.jdtech.tubedroid.desktop.jrwi.inspectFiles
+import dev.jdtech.tubedroid.desktop.jrwi.jrwiViewerItems
+import dev.jdtech.tubedroid.desktop.jrwi.showPictures
 import dev.jdtech.tubedroid.desktop.player.MpvLoader
 import dev.jdtech.tubedroid.desktop.player.PlayerOsd
 import dev.jdtech.tubedroid.desktop.player.PlayerRequest
@@ -82,14 +86,17 @@ fun main(args: Array<String>) {
     System.setProperty(MpvLoader.NO_MPV_PROPERTY, "true")
     val output = File(args.firstOrNull() ?: "build/screens").also { it.mkdirs() }
     val server = SampleServer()
+    val archiver = SampleArchiver()
     val settings =
         AppSettings(Preferences.userRoot().node("tubedroid-preview")).apply {
             url = server.url
             token = "preview"
+            jrwiUrl = archiver.url
+            jrwiToken = "preview"
             downloadFolder = File(output, "downloads").path
         }
     val graph = AppGraph(settings)
-    installImageLoader(graph.api)
+    installImageLoader(graph.api, graph.jrwi.api)
     checkJellyfinSignIn(graph, server.url)
     // A playlist part way through, for Continue watching
     SampleData.playlists[1].let { playlist ->
@@ -150,6 +157,29 @@ fun main(args: Array<String>) {
         capture("queue")
         shell.select(Section.SETTINGS)
         capture("settings")
+        // The JRWI archive's pages, from a made-up archiver
+        shell.select(Section.JRWI_HOME)
+        capture("jrwi-home")
+        shell.select(Section.JRWI_SHOWS)
+        capture("jrwi-shows")
+        shell.open(Route.JrwiShowPage(SampleArchive.shows[0].id))
+        capture("jrwi-show")
+        shell.open(Route.JrwiPost(SampleArchive.episodes[1].id))
+        capture("jrwi-item")
+        shell.open(Route.JrwiSearch(show = SampleArchive.shows[0].id))
+        capture("jrwi-search")
+        shell.select(Section.JRWI_ARCHIVER)
+        capture("jrwi-archiver")
+        shell.select(Section.JRWI_STATS)
+        capture("jrwi-stats")
+        shell.showPictures(
+            JrwiPictures(jrwiViewerItems(SampleArchive.episodes[0], SampleArchive.files), 1)
+        )
+        capture("jrwi-viewer")
+        shell.closeOverlay()
+        shell.inspectFiles(listOf(SampleArchive.files[1]), 0)
+        capture("jrwi-inspector")
+        shell.closeOverlay()
         // The player, from a playlist, with its controls; without mpv the video's place is empty
         shell.play(
             PlayerRequest.Ta(
@@ -269,6 +299,7 @@ fun main(args: Array<String>) {
         firstRun.close()
     }
     server.stop()
+    archiver.stop()
     exitProcess(0)
 }
 

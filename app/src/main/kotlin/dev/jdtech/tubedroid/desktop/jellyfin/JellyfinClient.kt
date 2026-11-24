@@ -201,6 +201,54 @@ class JellyfinClient(private val settings: AppSettings) {
                 .items
         }
 
+    /**
+     * Shows named like [name], with where their files are, for finding the JRWI archiver's videos,
+     * which it files under a folder named after their show.
+     */
+    suspend fun seriesNamed(name: String): List<BaseItemDto> =
+        withContext(Dispatchers.IO) {
+            api.libraryApi
+                .getItems(
+                    userId = userId,
+                    searchTerm = name,
+                    includeItemTypes = listOf(BaseItemKind.SERIES),
+                    recursive = true,
+                    fields = FILE_FIELDS,
+                    limit = 25,
+                    enableUserData = false,
+                )
+                .content
+                .items
+        }
+
+    /** Every episode of a show, each with its file's path and the IDs its .nfo gives it. */
+    suspend fun episodeFiles(seriesId: UUID): List<BaseItemDto> =
+        withContext(Dispatchers.IO) {
+            api.libraryApi
+                .getItems(
+                    userId = userId,
+                    parentId = seriesId,
+                    includeItemTypes = listOf(BaseItemKind.EPISODE),
+                    recursive = true,
+                    fields = FILE_FIELDS,
+                    enableUserData = false,
+                )
+                .content
+                .items
+        }
+
+    /**
+     * Sets where an item was left without playing it, such as after listening to its audio
+     * elsewhere: Jellyfin takes it as a play that stopped there.
+     */
+    suspend fun setPosition(id: UUID, seconds: Double) {
+        withContext(Dispatchers.IO) {
+            api.sessionApi.reportPlaybackStopped(
+                PlaybackStopInfo(itemId = id, positionTicks = ticks(seconds), failed = false)
+            )
+        }
+    }
+
     suspend fun setPlayed(id: UUID, played: Boolean) {
         withContext(Dispatchers.IO) {
             if (played) api.userDataApi.markPlayedItem(id) else api.userDataApi.markUnplayedItem(id)
@@ -341,6 +389,8 @@ class JellyfinClient(private val settings: AppSettings) {
     }
 
     companion object {
+        private val FILE_FIELDS = listOf(ItemFields.PROVIDER_IDS, ItemFields.PATH)
+
         // Higher than any file, so Jellyfin never asks for a smaller copy
         private const val MAX_BITRATE = 1_000_000_000
 

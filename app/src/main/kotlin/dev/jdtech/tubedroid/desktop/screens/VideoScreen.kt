@@ -414,6 +414,7 @@ private fun DownloadButton(
     onCancel: () -> Unit,
 ) {
     when (download?.state) {
+        LocalDownload.State.QUEUED,
         LocalDownload.State.RUNNING ->
             DetailButton(
                 icon = "ic_x",
@@ -444,6 +445,7 @@ private fun DownloadButton(
 fun DownloadProgress(download: LocalDownload) {
     Column(modifier = Modifier.padding(top = Spacings.small).widthIn(max = 420.dp)) {
         when (download.state) {
+            LocalDownload.State.QUEUED,
             LocalDownload.State.RUNNING -> {
                 val progress = download.progress
                 if (progress != null) {

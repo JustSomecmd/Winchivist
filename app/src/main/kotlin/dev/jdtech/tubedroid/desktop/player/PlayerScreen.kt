@@ -457,6 +457,7 @@ internal class PlayerSession(
             fullscreen = wantsFullscreen
             onFullscreen(wantsFullscreen)
         }
+        val pausedBefore = paused
         paused = player.getFlag("pause")
         muted = player.getFlag("mute")
         player.getDouble("volume")?.let { volume = it }
@@ -466,9 +467,12 @@ internal class PlayerSession(
         // Until the new file has loaded, mpv's state can still be the last one's
         if (loading) return
         checkSegment(player)
-        val paused = player.getFlag("pause")
         val now = System.currentTimeMillis()
-        if (!paused && now - lastReport > PROGRESS_INTERVAL_MS) {
+        if (paused && !pausedBefore) {
+            // Where it was paused is saved right away, rather than with the next regular save
+            lastReport = now
+            reportProgress(position, paused = true)
+        } else if (!paused && now - lastReport > PROGRESS_INTERVAL_MS) {
             lastReport = now
             reportProgress(position, paused = false)
         }
@@ -562,6 +566,7 @@ internal class PlayerSession(
             volume = volume.roundToInt().coerceIn(0, 100),
             audioId = audioId,
             subtitleId = subtitleId,
+            duration = duration.takeIf { it > 0 },
         )
 
     /** Saves where it got to and stops mpv. Called before its window goes. */
@@ -616,11 +621,32 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     val session =
         remember(request) {
+            // With the JRWI archive connected, an episode of its that plays from TubeArchivist or
+            // Jellyfin keeps its place in the archive too
+            val linked = app.settings.isJrwiConfigured
             val source =
                 when (request) {
-                    is PlayerRequest.Ta ->
-                        TaPlaybackSource(app.api, app.settings, app.history, request)
-                    is PlayerRequest.Jellyfin -> JellyfinPlaybackSource(app.jellyfin, request)
+                    is PlayerRequest.Ta -> {
+                        val plain = TaPlaybackSource(app.api, app.settings, app.history, request)
+                        if (linked) {
+                            JrwiLinkedSource(plain, app.jrwi, request.fromStart) { play ->
+                                app.jrwi.itemForYoutube(play.id)
+                            }
+                        } else {
+                            plain
+                        }
+                    }
+                    is PlayerRequest.Jellyfin -> {
+                        val plain = JellyfinPlaybackSource(app.jellyfin, request)
+                        if (linked) {
+                            JrwiLinkedSource(plain, app.jrwi, request.fromStart) { play ->
+                                app.jrwi.itemForEpisode(java.util.UUID.fromString(play.id))
+                            }
+                        } else {
+                            plain
+                        }
+                    }
+                    is PlayerRequest.Jrwi -> JrwiPlaybackSource(app.jrwi, request)
                 }
             PlayerSession(source, app.settings, scope)
         }

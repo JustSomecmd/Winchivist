@@ -13,7 +13,10 @@ import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.MediaSegmentType
 import org.jellyfin.sdk.model.api.MediaStreamType
 
-/** What to play: a TubeArchivist video, or a movie or episode on Jellyfin. */
+/**
+ * What to play: a TubeArchivist video, a movie or episode on Jellyfin, or a JRWI episode straight
+ * from its archive.
+ */
 sealed interface PlayerRequest {
     /** Starts at the beginning even when it was watched part of the way. */
     val fromStart: Boolean
@@ -27,6 +30,16 @@ sealed interface PlayerRequest {
 
     /** A movie or episode on Jellyfin. Episodes go on to the next one. */
     data class Jellyfin(val itemId: String, override val fromStart: Boolean = false) : PlayerRequest
+
+    /**
+     * A JRWI episode straight from the archive, by any of its posts' IDs: its audio, or with
+     * [audio] false its archived video, for when Jellyfin doesn't have it.
+     */
+    data class Jrwi(
+        val postId: Long,
+        val audio: Boolean,
+        override val fromStart: Boolean = false,
+    ) : PlayerRequest
 }
 
 /** A subtitle file next to the video, which mpv adds as a track. */
@@ -75,6 +88,8 @@ internal data class PlaybackReport(
     /** mpv's audio and subtitle tracks; null when there's none or it's off. */
     val audioId: Int? = null,
     val subtitleId: Int? = null,
+    /** How long what plays is, as the player has it, or null while it isn't known. */
+    val duration: Double? = null,
 )
 
 /** Where the player's videos come from, and where it reports back to: TubeArchivist or Jellyfin. */
