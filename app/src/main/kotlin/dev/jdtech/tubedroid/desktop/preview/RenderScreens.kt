@@ -107,6 +107,9 @@ fun main(args: Array<String>) {
             jrwiUrl = archiver.url
             jrwiToken = "preview"
             downloadFolder = File(output, "downloads").path
+            // The compute box asks nothing by itself while the pages are drawn
+            hearWhen = AppSettings.HEAR_BY_HAND
+            hearAskAfter = null
         }
     val graph = AppGraph(settings)
     installImageLoader(graph.api, graph.jrwi.api)
@@ -194,6 +197,19 @@ fun main(args: Array<String>) {
         graph.compute.showForPreview()
         shell.select(Section.JRWI_COMPUTE)
         capture("jrwi-compute")
+        // The compute box asking whether now is a good time, over a JRWI page and one that isn't
+        graph.compute.askForPreview()
+        shell.select(Section.JRWI_HOME)
+        capture("ask-jrwi")
+        shell.select(Section.HOME)
+        capture("ask")
+        settings.hearWhen = AppSettings.HEAR_ASK
+        graph.compute.askLater(tomorrow = false)
+        shell.select(Section.JRWI_COMPUTE)
+        capture("jrwi-compute-ask")
+        settings.hearWhen = AppSettings.HEAR_BY_HAND
+        settings.hearAskAfter = null
+        graph.compute.showForPreview()
         shell.select(Section.JRWI_STATS)
         capture("jrwi-stats")
         shell.showPictures(

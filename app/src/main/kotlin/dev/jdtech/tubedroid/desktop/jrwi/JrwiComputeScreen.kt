@@ -48,6 +48,9 @@ import dev.jdtech.tubedroid.desktop.ui.BlockPage
 import dev.jdtech.tubedroid.desktop.ui.RoundIconButton
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.formatDuration
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.Locale
 import javax.swing.JFileChooser
 import javax.swing.filechooser.FileNameExtensionFilter
@@ -87,7 +90,7 @@ fun JrwiComputeScreen() {
                 FullLine(id = "status") { ComputeStatusCard(box, app.settings) }
                 FullLine(id = "actions") { ComputeActions(box, app.settings) }
                 // The lists grow while it hears, so their rough heights are fixed ones
-                Block(id = "settings", about = 560.dp) { ComputeSettingsCard(app.settings) }
+                Block(id = "settings", about = 560.dp) { ComputeSettingsCard(box, app.settings) }
                 Block(id = "pc", about = 340.dp) { ComputePcCard(box, app.settings) }
                 Block(id = "heard", about = 400.dp) { ComputeHeardCard(box.heard, open) }
                 Block(id = "waiting", about = 520.dp) { ComputeWaitingCard(box, open) }
@@ -199,7 +202,7 @@ private fun ComputeWaiting(box: ComputeBox, settings: AppSettings) {
                 all.isEmpty() -> "The archiver has no episode to hear yet"
                 waiting.isEmpty() -> "Every episode has been heard with $model"
                 else ->
-                    plural(waiting.size, "1 episode", "${waiting.size} episodes") +
+                    plural(waiting.size, "episode", "episodes") +
                         " to hear with $model, " +
                         hours(waiting.sumOf { it.seconds ?: 0.0 }) +
                         " of sound"
@@ -216,6 +219,14 @@ private fun ComputeWaiting(box: ComputeBox, settings: AppSettings) {
     }
     JrwiMutedLine(
         when (settings.hearWhen) {
+            AppSettings.HEAR_ASK ->
+                if (box.canHear == false) {
+                    "It would ask before hearing, but found no Python with faster-whisper on " +
+                        "this PC: see Check this PC."
+                } else {
+                    "It asks first: when an episode is waiting, a card in Winchivist's window " +
+                        "asks whether now is a good time."
+                }
             AppSettings.HEAR_IDLE ->
                 "It starts by itself once this PC has been left alone for " +
                     "${settings.hearIdleMinutes} minutes on mains power, while Winchivist runs."
@@ -227,7 +238,17 @@ private fun ComputeWaiting(box: ComputeBox, settings: AppSettings) {
     )
 }
 
-private fun hours(seconds: Double): String {
+/** A moment as the time of day, or as tomorrow when it isn't today any more. */
+private fun askTime(millis: Long): String {
+    val at = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault())
+    return if (at.toLocalDate() == LocalDate.now()) {
+        String.format(Locale.ROOT, "%02d:%02d", at.hour, at.minute)
+    } else {
+        "tomorrow"
+    }
+}
+
+internal fun hours(seconds: Double): String {
     val hours = seconds / 3600
     return if (hours < 10) String.format(Locale.ROOT, "%.1f hours", hours)
     else "${hours.toInt()} hours"
@@ -274,7 +295,7 @@ private fun ComputeActions(box: ComputeBox, settings: AppSettings) {
                 text =
                     if (waiting > 0) {
                         "Hear " +
-                            plural(waiting, "the episode", "the $waiting episodes") +
+                            (if (waiting == 1) "the episode" else "the $waiting episodes") +
                             " waiting with ${settings.hearModel}, newest first"
                     } else {
                         "Nothing is waiting to be heard with ${settings.hearModel}"
@@ -295,7 +316,7 @@ private fun ComputeActions(box: ComputeBox, settings: AppSettings) {
 
 /** Which model hears, on what, which episodes, and when it starts by itself. */
 @Composable
-private fun ComputeSettingsCard(settings: AppSettings) {
+private fun ComputeSettingsCard(box: ComputeBox, settings: AppSettings) {
     JrwiCard(title = "How it hears") {
         Choice(
             title = "Speech model",
@@ -327,9 +348,12 @@ private fun ComputeSettingsCard(settings: AppSettings) {
         )
         Choice(
             title = "Starts",
-            text = "By itself it needs Winchivist running, in its window or in the tray.",
+            text =
+                "To ask, or to start by itself, it needs Winchivist running, in its window or " +
+                    "in the tray.",
             options =
                 listOf(
+                    AppSettings.HEAR_ASK to "After asking me",
                     AppSettings.HEAR_BY_HAND to "When I press Start",
                     AppSettings.HEAR_IDLE to "When this PC is idle",
                     AppSettings.HEAR_HOURS to "Between set hours",
@@ -338,6 +362,27 @@ private fun ComputeSettingsCard(settings: AppSettings) {
             onSelect = { settings.hearWhen = it },
         )
         when (settings.hearWhen) {
+            AppSettings.HEAR_ASK -> {
+                JrwiMutedLine(
+                    "It looks every half hour for episodes waiting. When there are any, a card " +
+                        "in a corner of Winchivist's window asks whether now is a good time, " +
+                        "and nothing is heard before the answer is yes. With a video playing, " +
+                        "or the window closed, the card waits."
+                )
+                val held = box.askHeldUntil()
+                if (held != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text =
+                                "The answer was not now, so it asks again after ${askTime(held)}.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        TextButton(onClick = box::askAgain) { Text("Ask again now") }
+                    }
+                }
+            }
             AppSettings.HEAR_IDLE ->
                 Choice(
                     title = "Idle for",

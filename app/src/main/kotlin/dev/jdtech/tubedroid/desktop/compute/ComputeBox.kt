@@ -14,7 +14,9 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
@@ -91,8 +93,9 @@ class Heard(
  * the page shows. It claims each episode before hearing it, so the archiver's own timing and other
  * computers leave that one alone; an episode someone else has claimed is left for later.
  *
- * Nothing is heard until Start is pressed, or the PC is idle or the hour is right when Settings
- * says to wait for that.
+ * Nothing is heard that wasn't agreed to. Unless changed, it looks now and then for episodes
+ * waiting and asks in Winchivist's window whether now is a good time ([asking]); it can also wait
+ * for Start alone, or start by itself with the PC idle or between set hours.
  */
 class ComputeBox(private val app: AppGraph) {
     private val settings: AppSettings
@@ -182,6 +185,26 @@ class ComputeBox(private val app: AppGraph) {
     var programShown by mutableStateOf<String?>(null)
         private set
 
+    /**
+     * The episodes it's asking about, when it asks first whether now is a good time to hear them;
+     * null while it isn't asking.
+     */
+    var asking by mutableStateOf<List<HearJob>?>(null)
+        private set
+
+    /**
+     * Whether this PC has a Python with faster-whisper to hear with; null until it was looked at.
+     */
+    var canHear by mutableStateOf<Boolean?>(null)
+        private set
+
+    /**
+     * Something to say wherever the user is in Winchivist, once: how a run they agreed to came to
+     * nothing.
+     */
+    var notice by mutableStateOf<String?>(null)
+        private set
+
     private var running: Job? = null
     @Volatile private var helper: Process? = null
     @Volatile private var stopping = false
@@ -209,12 +232,20 @@ class ComputeBox(private val app: AppGraph) {
         scope.launch {
             snapshotFlow { settings.hearWhen }
                 .collectLatest { mode ->
-                    // Nothing looks at the clock or the mouse while it only starts by hand
+                    // A question from before this was changed no longer stands
+                    asking = null
+                    // Nothing looks at the clock, the mouse or the archiver while it only starts
+                    // by hand
                     if (mode == AppSettings.HEAR_BY_HAND) return@collectLatest
                     while (true) {
                         delay(WATCH_EVERY_MS)
                         val now = System.currentTimeMillis()
-                        if (!checking && now >= notBefore && wanted()) start(byItself = true)
+                        if (checking || now < notBefore) continue
+                        if (mode == AppSettings.HEAR_ASK) {
+                            if (now >= askAfter(now)) look()
+                        } else if (wanted()) {
+                            start(byItself = true)
+                        }
                     }
                 }
         }
@@ -256,6 +287,70 @@ class ComputeBox(private val app: AppGraph) {
             else -> false
         }
 
+    /**
+     * With asking first: reads the archiver's list, and when an episode waits that nobody is
+     * hearing, asks whether now is a good time. Quietly: an archiver that can't be reached is tried
+     * again later with nothing said, and a PC that has nothing to hear with isn't asked.
+     */
+    private suspend fun look() {
+        if (state != State.WAITING || !settings.isJrwiConfigured) return
+        state = State.LISTING
+        try {
+            if (!list(quiet = true)) return
+            val todo = toHear().filter { it.claimedBy == null }
+            asking = todo.takeIf { it.isNotEmpty() && ableToHear() }
+        } finally {
+            state = State.WAITING
+            notBefore = System.currentTimeMillis() + AUTO_AGAIN_MS
+        }
+    }
+
+    // Whether a Python with faster-whisper is on this PC: looked at once, until another Python is
+    // picked or the PC is checked
+    private suspend fun ableToHear(): Boolean =
+        canHear
+            ?: withContext(Dispatchers.IO) {
+                    findPython()?.let { runs(it + listOf("-c", HAS_WHISPER), 60) } == true
+                }
+                .also { canHear = it }
+
+    // "Not now" holds the question back until then. A time further off than a day can only come
+    // from a clock that was wrong, and doesn't count
+    private fun askAfter(now: Long): Long =
+        settings.hearAskAfter?.toLongOrNull()?.takeIf { it - now <= ASK_HELD_AT_MOST_MS } ?: 0L
+
+    /** When it asks again at the earliest, after a "not now"; null when nothing holds it back. */
+    fun askHeldUntil(): Long? {
+        val now = System.currentTimeMillis()
+        return askAfter(now).takeIf { it > now }
+    }
+
+    /** Not now: it asks again in an hour, or not before tomorrow. */
+    fun askLater(tomorrow: Boolean) {
+        asking = null
+        val at =
+            if (tomorrow) {
+                LocalDate.now()
+                    .plusDays(1)
+                    .atStartOfDay(ZoneId.systemDefault())
+                    .toInstant()
+                    .toEpochMilli()
+            } else {
+                System.currentTimeMillis() + ASK_AGAIN_MS
+            }
+        settings.hearAskAfter = at.toString()
+    }
+
+    /** Asks again as soon as an episode waits, whatever "not now" said. */
+    fun askAgain() {
+        settings.hearAskAfter = null
+        notBefore = 0
+    }
+
+    fun noticeShown() {
+        notice = null
+    }
+
     /** Asks the archiver again which episodes can be heard. */
     fun refresh() {
         if (state != State.WAITING) return
@@ -270,8 +365,11 @@ class ComputeBox(private val app: AppGraph) {
         }
     }
 
-    /** Reads the archiver's list of episodes. Returns whether there is one to go by. */
-    private suspend fun list(): Boolean {
+    /**
+     * Reads the archiver's list of episodes. Returns whether there is one to go by. With [quiet],
+     * what went wrong isn't shown.
+     */
+    private suspend fun list(quiet: Boolean = false): Boolean {
         try {
             val has = app.jrwi.api.has(FEATURE)
             supported = has
@@ -292,7 +390,7 @@ class ComputeBox(private val app: AppGraph) {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            error = jrwiErrorText(e)
+            if (!quiet) error = jrwiErrorText(e)
             return false
         }
     }
@@ -342,25 +440,36 @@ class ComputeBox(private val app: AppGraph) {
         }
     }
 
-    /** Hears the episodes waiting, newest first, until there are none or it's paused. */
-    fun start(byItself: Boolean = false) {
+    /**
+     * Hears the episodes waiting, newest first, until there are none or it's paused. [asked] is for
+     * a yes to its own question, when the user may be anywhere in Winchivist and is told there if
+     * it comes to nothing.
+     */
+    fun start(byItself: Boolean = false, asked: Boolean = false) {
         // One program at a time: the check runs it too
         if (state != State.WAITING || checking) return
+        asking = null
         state = State.LISTING
-        running = scope.launch { hearAll(byItself) }
+        running = scope.launch { hearAll(byItself, asked) }
     }
 
-    private suspend fun hearAll(byItself: Boolean) {
+    private suspend fun hearAll(byItself: Boolean, asked: Boolean) {
         error = null
         pausing = false
         stopping = false
         // By itself it comes back later; stopped early because the PC is in use, straight away
         var again = AUTO_AGAIN_MS
+        // Why nothing was heard, when nothing was
+        var notHeard: String? = null
+        var heardHere = 0
         try {
             if (!list()) return
             // Those someone else is hearing now are left for a later round
             val todo = toHear().filter { it.claimedBy == null }
-            if (todo.isEmpty()) return
+            if (todo.isEmpty()) {
+                notHeard = "Nothing is waiting to be heard any more."
+                return
+            }
             val model = settings.hearModel
             if (withContext(Dispatchers.IO) { findPython() } == null) {
                 error = NO_PYTHON
@@ -397,17 +506,23 @@ class ComputeBox(private val app: AppGraph) {
                     jobs = jobs?.map {
                         if (it.itemId == job.itemId) it.copy(claimedBy = hearingIt) else it
                     }
+                    notHeard = result.text
                 } else if (result.ok) {
                     failed = 0
                     heardNow++
+                    heardHere++
                     sent += "${job.itemId} $model"
                     jobs = jobs?.map {
                         if (it.itemId == job.itemId) it.heardBy(model, result) else it
                     }
-                } else if (++failed >= 2) {
-                    // The same thing would stop every episode after these
-                    error = "Stopped, as two episodes in a row couldn't be heard.\n${result.text}"
-                    break
+                } else {
+                    notHeard = "${job.title} couldn't be heard. ${result.text}"
+                    if (++failed >= 2) {
+                        // The same thing would stop every episode after these
+                        error =
+                            "Stopped, as two episodes in a row couldn't be heard.\n${result.text}"
+                        break
+                    }
                 }
             }
         } catch (e: CancellationException) {
@@ -415,6 +530,12 @@ class ComputeBox(private val app: AppGraph) {
         } catch (e: Exception) {
             error = e.message ?: e.toString()
         } finally {
+            // After a yes to its question the user may be on any page, so what went wrong is said
+            // there too. A stop by hand needs no telling
+            val wrong = error ?: notHeard?.takeIf { heardHere == 0 }
+            if (asked && wrong != null && again != HELD_AFTER_STOP_MS) {
+                notice = "Compute box: " + wrong.lineSequence().first()
+            }
             current = null
             step = null
             fraction = null
@@ -680,6 +801,7 @@ class ComputeBox(private val app: AppGraph) {
             val said = StringBuilder()
             try {
                 python = null
+                canHear = null
                 if (withContext(Dispatchers.IO) { findPython() } == null) {
                     checkText = NO_PYTHON
                     return@launch
@@ -725,6 +847,7 @@ class ComputeBox(private val app: AppGraph) {
     fun pythonChanged() {
         python = null
         pythonShown = null
+        canHear = null
     }
 
     /** Stops the program and everything else, when Winchivist goes. */
@@ -1058,6 +1181,7 @@ class ComputeBox(private val app: AppGraph) {
             )
         episodes = 181
         supported = true
+        asking = null
         state = State.HEARING
         current = waiting.first()
         heardNow = 1
@@ -1087,6 +1211,15 @@ class ComputeBox(private val app: AppGraph) {
         programShown = "Version 1.4, the archiver's own copy"
     }
 
+    /** Shows the box asking whether now is a good time, for the page renders. */
+    internal fun askForPreview() {
+        state = State.WAITING
+        current = null
+        step = null
+        fraction = null
+        asking = jobs.orEmpty().filter { it.claimedBy == null && !it.timed }
+    }
+
     companion object {
         const val PROGRAM = "jrwi_hear.py"
 
@@ -1097,6 +1230,8 @@ class ComputeBox(private val app: AppGraph) {
         private const val WATCH_EVERY_MS = 30_000L
         private const val AUTO_AGAIN_MS = 30 * 60_000L
         private const val HELD_AFTER_STOP_MS = 60 * 60_000L
+        private const val ASK_AGAIN_MS = 60 * 60_000L
+        private const val ASK_HELD_AT_MOST_MS = 26 * 60 * 60_000L
         private const val HEARD_KEPT = 50
         private const val LINES_KEPT = 12
         private const val ERROR_LINES = 6

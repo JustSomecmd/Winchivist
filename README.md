@@ -19,7 +19,8 @@ desktop app uses.
   TubeArchivist task. Two switches, off at first, keep Winchivist in the tray and start it with Windows
 - A compute box: this PC can hear episodes for the JRWI archiver's timed transcripts, by running the archiver's own
   `jrwi_hear.py` with a Python on the PC that has faster-whisper. The program is fetched from the archiver whenever
-  its version changes
+  its version changes. Unless changed, a card in the window asks first whether now is a good time, and nothing is
+  heard before the answer is yes
 
 ## Install and update
 

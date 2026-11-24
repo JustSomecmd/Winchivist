@@ -60,6 +60,7 @@ import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinLibraryScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinPersonScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinPlaylistsScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinShowScreen
+import dev.jdtech.tubedroid.desktop.jrwi.ComputeAskCard
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiArchiverScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiComputeScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiHomeScreen
@@ -90,6 +91,7 @@ import dev.jdtech.tubedroid.desktop.screens.VideoScreen
 import dev.jdtech.tubedroid.desktop.screens.VideosScreen
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
 import dev.jdtech.tubedroid.desktop.ui.ServerSideTheme
+import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.WinchivistLogo
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -217,30 +219,45 @@ fun ShellContent(shell: Shell) {
         ) {
             val request = shell.player
             val audio = LocalApp.current.audio
+            // What the compute box has to say after a yes to its question, wherever that was given
+            val compute = LocalApp.current.compute
+            LaunchedEffect(compute.notice) {
+                compute.notice?.let {
+                    shell.message(it)
+                    compute.noticeShown()
+                }
+            }
             if (request != null) {
                 PlayerScreen(request = request, onClose = shell::closePlayer)
             } else {
                 Column(modifier = Modifier.fillMaxSize()) {
-                    Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        Sidebar(shell, available)
-                        Surface(
-                            color = MaterialTheme.colorScheme.background,
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                        ) {
-                            val entry = shell.current
-                            AnimatedContent(
-                                targetState = entry,
-                                transitionSpec = { fadeIn() togetherWith fadeOut() },
-                                label = "page",
-                            ) { page ->
-                                CompositionLocalProvider(
-                                    LocalPageEntry provides page,
-                                    LocalCanGoBack provides (page === entry && shell.canGoBack),
-                                ) {
-                                    PageContent(page.route)
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            Sidebar(shell, available)
+                            Surface(
+                                color = MaterialTheme.colorScheme.background,
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                            ) {
+                                val entry = shell.current
+                                AnimatedContent(
+                                    targetState = entry,
+                                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                                    label = "page",
+                                ) { page ->
+                                    CompositionLocalProvider(
+                                        LocalPageEntry provides page,
+                                        LocalCanGoBack provides (page === entry && shell.canGoBack),
+                                    ) {
+                                        PageContent(page.route)
+                                    }
                                 }
                             }
                         }
+                        // The compute box asking whether now is a good time, over whatever page
+                        // shows and above the audio player's bar. Not over a video that plays
+                        ComputeAskCard(
+                            modifier = Modifier.align(Alignment.BottomEnd).padding(Spacings.default)
+                        )
                     }
                     // While something is loaded in it, the audio player's bar
                     AudioBar(audio)

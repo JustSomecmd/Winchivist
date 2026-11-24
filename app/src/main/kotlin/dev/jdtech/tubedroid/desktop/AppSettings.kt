@@ -104,10 +104,16 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
     var jellyfinSortDescending: Boolean by storedBoolean("jellyfin_sort_descending", false)
 
     /**
-     * The compute box: when this PC hears episodes for the archiver's timed transcripts. Only when
-     * started by hand unless changed, so nothing is heard that wasn't asked for.
+     * The compute box: when this PC hears episodes for the archiver's timed transcripts. Unless
+     * changed it asks first whether now is a good time, so nothing is heard that wasn't agreed to.
      */
-    var hearWhen: String by stored<String>("hear_when", HEAR_BY_HAND)
+    var hearWhen: String by stored<String>("hear_when", HEAR_ASK)
+
+    /**
+     * With asking first: the moment before which it doesn't ask, in milliseconds since 1970, after
+     * the answer was "not now".
+     */
+    var hearAskAfter: String? by stored<String?>("hear_ask_after", null)
 
     /** The speech model that hears, and where: auto, cuda (the graphics card) or cpu. */
     var hearModel: String by stored<String>("hear_model", "large-v3-turbo")
@@ -256,7 +262,11 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
         const val SPONSORBLOCK_AUTO = "auto"
         const val SPONSORBLOCK_OFF = "off"
 
-        /** When the compute box hears: started by hand, with the PC idle, or between hours. */
+        /**
+         * When the compute box hears: after asking, started by hand, with the PC idle, or between
+         * hours.
+         */
+        const val HEAR_ASK = "ask"
         const val HEAR_BY_HAND = "hand"
         const val HEAR_IDLE = "idle"
         const val HEAR_HOURS = "hours"
