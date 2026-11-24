@@ -626,7 +626,7 @@ private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
     DropdownMenuItem(
         text = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = title, modifier = Modifier.widthIn(min = 120.dp))
+                Text(text = title, modifier = Modifier.widthIn(min = 104.dp))
                 Spacer(Modifier.width(Spacings.medium))
                 Text(
                     text = value,
@@ -635,6 +635,8 @@ private fun SettingRow(title: String, value: String, onClick: () -> Unit) {
                 )
             }
         },
+        // Kept free, so the names line up with the ticked rows under them
+        leadingIcon = { Box(Modifier.size(18.dp)) },
         trailingIcon = {
             AppIcon(
                 name = "ic_chevron_right",
