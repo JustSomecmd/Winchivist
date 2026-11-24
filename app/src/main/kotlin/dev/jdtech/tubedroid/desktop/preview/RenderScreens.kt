@@ -191,6 +191,9 @@ fun main(args: Array<String>) {
         capture("jrwi-search")
         shell.select(Section.JRWI_ARCHIVER)
         capture("jrwi-archiver")
+        graph.compute.showForPreview()
+        shell.select(Section.JRWI_COMPUTE)
+        capture("jrwi-compute")
         shell.select(Section.JRWI_STATS)
         capture("jrwi-stats")
         shell.showPictures(

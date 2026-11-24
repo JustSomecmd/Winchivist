@@ -81,7 +81,8 @@ fun main(args: Array<String>) {
         val shell = remember { Shell(graph.audio) }
         val trayState = rememberTrayState()
         val quit = {
-            // Where the sound got to is saved before the app goes
+            // The program hearing an episode is stopped, and where the sound got to is saved
+            graph.compute.close()
             graph.audio.close()
             awaitPlaybackSaves()
             exitApplication()

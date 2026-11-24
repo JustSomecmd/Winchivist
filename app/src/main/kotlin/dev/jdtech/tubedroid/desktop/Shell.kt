@@ -61,6 +61,7 @@ import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinPersonScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinPlaylistsScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinShowScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiArchiverScreen
+import dev.jdtech.tubedroid.desktop.jrwi.JrwiComputeScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiHomeScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiItemScreen
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiPurple
@@ -533,6 +534,7 @@ private fun PageContent(route: Route) {
         Route.JrwiShows -> JrwiShowsScreen()
         Route.JrwiArchiver -> JrwiArchiverScreen()
         Route.JrwiStats -> JrwiStatsScreen()
+        Route.JrwiCompute -> JrwiComputeScreen()
         is Route.JrwiShowPage -> JrwiShowScreen(route.showId)
         is Route.JrwiPost -> JrwiItemScreen(route.postId)
         is Route.JrwiSearch ->

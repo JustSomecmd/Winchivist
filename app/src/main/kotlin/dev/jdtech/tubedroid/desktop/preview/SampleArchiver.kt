@@ -506,6 +506,7 @@ internal class SampleArchiver {
                 """{"name":"jrwi-archiver","version":"0.14.9","contract":"0.27","features":""" +
                     """["post_progress","tags","continue","stop","feed","stats","reparse",""" +
                     """"podcast","watched","transcript","transcript_jobs"],"watched_left":120.0}"""
+            "transcripts" -> """{"jobs":[],"left_out":[],"episodes":0}"""
             "status" -> json.encodeToString(JrwiStatus.serializer(), SampleArchive.status)
             "stats" -> json.encodeToString(JrwiStats.serializer(), SampleArchive.stats)
             "podcast" -> json.encodeToString(JrwiPodcast.serializer(), SampleArchive.podcast)

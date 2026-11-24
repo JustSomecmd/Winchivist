@@ -76,6 +76,9 @@ sealed interface Route {
     /** The JRWI archive's numbers. */
     data object JrwiStats : Route
 
+    /** This PC hearing episodes for the archiver's timed transcripts. */
+    data object JrwiCompute : Route
+
     /** One of the JRWI archive's shows, with its tabs and seasons. */
     data class JrwiShowPage(val showId: String) : Route
 
@@ -110,6 +113,7 @@ enum class Section(val root: Route, val label: String, val icon: String, val gro
     JRWI_SHOWS(Route.JrwiShows, "Shows", "ic_library", RailGroup.JRWI),
     JRWI_ARCHIVER(Route.JrwiArchiver, "Archiver", "ic_server", RailGroup.JRWI),
     JRWI_STATS(Route.JrwiStats, "Archive stats", "ic_gauge", RailGroup.JRWI),
+    JRWI_COMPUTE(Route.JrwiCompute, "Compute box", "ic_monitor", RailGroup.JRWI),
     JELLYFIN(Route.JellyfinHome, "Home", "ic_home", RailGroup.JELLYFIN),
     MOVIES(Route.JellyfinMovies, "Movies", "ic_film", RailGroup.JELLYFIN),
     SHOWS(Route.JellyfinShows, "Shows", "ic_tv", RailGroup.JELLYFIN),

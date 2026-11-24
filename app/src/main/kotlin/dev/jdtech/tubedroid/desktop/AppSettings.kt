@@ -103,6 +103,28 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
     var jellyfinSort: String by stored<String>("jellyfin_sort", "name")
     var jellyfinSortDescending: Boolean by storedBoolean("jellyfin_sort_descending", false)
 
+    /**
+     * The compute box: when this PC hears episodes for the archiver's timed transcripts. Only when
+     * started by hand unless changed, so nothing is heard that wasn't asked for.
+     */
+    var hearWhen: String by stored<String>("hear_when", HEAR_BY_HAND)
+
+    /** The speech model that hears, and where: auto, cuda (the graphics card) or cpu. */
+    var hearModel: String by stored<String>("hear_model", "large-v3-turbo")
+    var hearDevice: String by stored<String>("hear_device", "auto")
+
+    /** Whether every episode the model hasn't heard is heard, or only those not timed yet. */
+    var hearEvery: Boolean by storedBoolean("hear_every", true)
+
+    /** For hearing by itself: how long the PC has to be idle, or between which hours. */
+    var hearIdleMinutes: Int by storedInt("hear_idle_minutes", 10)
+    var hearFromHour: Int by storedInt("hear_from_hour", 1)
+    var hearToHour: Int by storedInt("hear_to_hour", 7)
+
+    /** The Python and the copy of the archiver's program to hear with, when not found by itself. */
+    var hearPython: String? by stored<String?>("hear_python", null)
+    var hearProgram: String? by stored<String?>("hear_program", null)
+
     /** A Windows notification when a movie or an episode is new on Jellyfin. */
     var notifyNewItems: Boolean by storedBoolean("notify_new_items", true)
 
@@ -233,5 +255,10 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
         const val SPONSORBLOCK_BUTTON = "button"
         const val SPONSORBLOCK_AUTO = "auto"
         const val SPONSORBLOCK_OFF = "off"
+
+        /** When the compute box hears: started by hand, with the PC idle, or between hours. */
+        const val HEAR_BY_HAND = "hand"
+        const val HEAR_IDLE = "idle"
+        const val HEAR_HOURS = "hours"
     }
 }

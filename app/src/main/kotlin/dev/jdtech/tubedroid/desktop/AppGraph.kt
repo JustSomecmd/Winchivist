@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import dev.jdtech.jellyfin.jrwi.JrwiApi
 import dev.jdtech.jellyfin.tubearchivist.TaApi
+import dev.jdtech.tubedroid.desktop.compute.ComputeBox
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinClient
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiDownloader
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiRepository
@@ -12,7 +13,7 @@ import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 
 /**
  * What the pages share: the settings, TubeArchivist, Jellyfin, the JRWI archive, the downloads to
- * this computer, the audio player and the check for a newer Winchivist.
+ * this computer, the audio player, the compute box and the check for a newer Winchivist.
  */
 class AppGraph(val settings: AppSettings) {
     val api = TaApi(settings)
@@ -23,6 +24,7 @@ class AppGraph(val settings: AppSettings) {
     val history = WatchHistory(settings, store = { jellyfin.playlistSessionStore })
     val jrwiDownloads = JrwiDownloader(this)
     val audio = AudioPlayer(this)
+    val compute = ComputeBox(this)
 }
 
 val LocalApp = staticCompositionLocalOf<AppGraph> { error("No app") }

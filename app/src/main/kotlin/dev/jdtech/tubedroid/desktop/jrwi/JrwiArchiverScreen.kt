@@ -662,7 +662,7 @@ private fun JrwiArchiverActions(model: JrwiArchiverModel, status: JrwiStatus) {
 }
 
 @Composable
-private fun JrwiActionTile(
+internal fun JrwiActionTile(
     icon: String,
     name: String,
     text: String,
