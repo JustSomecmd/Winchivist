@@ -323,7 +323,8 @@ private fun ComputeSettingsCard(settings: AppSettings) {
         Choice(
             title = "Hears on",
             text =
-                "Automatic takes an NVIDIA graphics card when it can be used, which is many times faster.",
+                "Automatic takes an NVIDIA graphics card when it can be used, which is many " +
+                    "times faster.",
             options =
                 listOf("auto" to "Automatic", "cuda" to "Graphics card", "cpu" to "Processor"),
             selected = settings.hearDevice,
@@ -332,8 +333,9 @@ private fun ComputeSettingsCard(settings: AppSettings) {
         Choice(
             title = "Episodes",
             text =
-                "Every episode the model hasn't heard, or only those without a timed transcript. " +
-                    "A new timing replaces the one in use only when it found at least as many words.",
+                "Every episode the model hasn't heard, or only those without a timed " +
+                    "transcript. A new timing replaces the one in use only when it found at " +
+                    "least as many words.",
             options = listOf("every" to "Every episode", "untimed" to "Not timed yet"),
             selected = if (settings.hearEvery) "every" else "untimed",
             onSelect = { settings.hearEvery = it == "every" },
