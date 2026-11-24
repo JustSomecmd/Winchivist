@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
 import dev.jdtech.tubedroid.desktop.ui.Spacings
@@ -379,6 +380,9 @@ private fun ValueButton(text: String, onClick: () -> Unit) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.primary,
             maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            // A long value wraps and leaves the arrow its room
+            modifier = Modifier.weight(1f, fill = false),
         )
         Spacer(Modifier.width(6.dp))
         AppIcon(
