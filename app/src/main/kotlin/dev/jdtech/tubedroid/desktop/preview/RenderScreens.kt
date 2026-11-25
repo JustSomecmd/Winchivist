@@ -56,6 +56,7 @@ import dev.jdtech.tubedroid.desktop.jrwi.JrwiPictures
 import dev.jdtech.tubedroid.desktop.jrwi.inspectFiles
 import dev.jdtech.tubedroid.desktop.jrwi.jrwiViewerItems
 import dev.jdtech.tubedroid.desktop.jrwi.showPictures
+import dev.jdtech.tubedroid.desktop.player.MiniOsd
 import dev.jdtech.tubedroid.desktop.player.MpvLoader
 import dev.jdtech.tubedroid.desktop.player.PlayerActions
 import dev.jdtech.tubedroid.desktop.player.PlayerOsd
@@ -250,6 +251,9 @@ fun main(args: Array<String>) {
             )
         )
         capture("player")
+        // The same video as the mini player, in a corner of the page it was started from
+        shell.shrinkPlayer()
+        capture("player-mini")
         shell.closePlayer()
         scene.close()
 
@@ -390,6 +394,39 @@ fun main(args: Array<String>) {
         }
         println("Rendered player-osd")
         osdScene.close()
+
+        // The mini player's controls over its picture, twice its size to be seen well
+        val miniScene =
+            ImageComposeScene(width = 800, height = 450, density = Density(2f)) {
+                CompositionLocalProvider(LocalApp provides graph) {
+                    TubedroidTheme(accent = settings.accent) {
+                        Box(
+                            modifier =
+                                Modifier.fillMaxSize()
+                                    .background(
+                                        Brush.linearGradient(
+                                            listOf(
+                                                ComposeColor(0xFF4A6B8C),
+                                                ComposeColor(0xFF22331F),
+                                            )
+                                        )
+                                    )
+                        ) {
+                            MiniOsd(session = osdSession, actions = PlayerActions(onClose = {}))
+                        }
+                    }
+                }
+            }
+        repeat(16) {
+            miniScene.render(time)
+            time += 200_000_000L
+            delay(200)
+        }
+        miniScene.render(time).encodeToData(EncodedImageFormat.PNG)?.let {
+            File(output, "player-mini-osd.png").writeBytes(it.bytes)
+        }
+        println("Rendered player-mini-osd")
+        miniScene.close()
 
         // The settings menu's pages side by side, each as the menu draws it
         val menuScene =

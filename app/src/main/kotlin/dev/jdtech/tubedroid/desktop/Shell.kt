@@ -34,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerButton
 import androidx.compose.ui.input.pointer.PointerEventType
@@ -116,6 +118,13 @@ class Shell(private val audio: AudioPlayer? = null) : Navigator {
     var player by mutableStateOf<PlayerRequest?>(null)
         private set
 
+    /**
+     * Whether the video plays as the mini player: in a small box in a corner of the window, with
+     * the pages around it to use.
+     */
+    var playerMini by mutableStateOf(false)
+        private set
+
     /** What shows over the whole window, such as a post's pictures, or null. */
     var overlay by mutableStateOf<(@Composable () -> Unit)?>(null)
         private set
@@ -147,7 +156,8 @@ class Shell(private val audio: AudioPlayer? = null) : Navigator {
             overlay = null
             return
         }
-        if (player != null) {
+        // The whole player is what's in front. The mini player leaves going back to the pages
+        if (player != null && !playerMini) {
             player = null
             return
         }
@@ -160,21 +170,35 @@ class Shell(private val audio: AudioPlayer? = null) : Navigator {
     }
 
     override fun play(request: PlayerRequest) {
+        // A video that's asked for plays whole, also when another was in the mini player
+        playerMini = false
         // The audio player makes way, and hands its place on when it had the same thing
         player = audio?.handOverTo(request) ?: request
     }
 
     override fun listen(request: PlayerRequest) {
         if (audio == null) {
+            playerMini = false
             player = request
             return
         }
-        player = null
+        closePlayer()
         audio.play(request)
     }
 
     fun closePlayer() {
         player = null
+        playerMini = false
+    }
+
+    /** Makes the video that plays the mini player, with the pages around it. */
+    fun shrinkPlayer() {
+        if (player != null) playerMini = true
+    }
+
+    /** The mini player's video over the whole window again. */
+    fun growPlayer() {
+        playerMini = false
     }
 
     override fun overlay(content: @Composable () -> Unit) {
@@ -227,9 +251,8 @@ fun ShellContent(shell: Shell) {
                     compute.noticeShown()
                 }
             }
-            if (request != null) {
-                PlayerScreen(request = request, onClose = shell::closePlayer)
-            } else {
+            val mini = request != null && shell.playerMini
+            if (request == null || mini) {
                 Column(modifier = Modifier.fillMaxSize()) {
                     Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                         Row(modifier = Modifier.fillMaxSize()) {
@@ -254,15 +277,45 @@ fun ShellContent(shell: Shell) {
                             }
                         }
                         // The compute box asking whether now is a good time, over whatever page
-                        // shows and above the audio player's bar. Not over a video that plays
-                        ComputeAskCard(
-                            modifier = Modifier.align(Alignment.BottomEnd).padding(Spacings.default)
-                        )
+                        // shows and above the audio player's bar. Not while a video plays, which
+                        // in the mini player has that corner
+                        if (request == null) {
+                            ComputeAskCard(
+                                modifier =
+                                    Modifier.align(Alignment.BottomEnd).padding(Spacings.default)
+                            )
+                        }
                     }
                     // While something is loaded in it, the audio player's bar
                     AudioBar(audio)
                 }
                 if (audio.expanded) AudioScreen(audio)
+            }
+            if (request != null) {
+                // One player for both sizes, so the video plays on as it's made small or whole
+                // again. Another video is another player
+                key(request) {
+                    Box(
+                        modifier =
+                            if (mini) {
+                                Modifier.align(Alignment.BottomEnd)
+                                    .padding(Spacings.default)
+                                    .shadow(16.dp)
+                                    .background(MaterialTheme.colorScheme.outline)
+                                    .padding(1.dp)
+                            } else {
+                                Modifier.fillMaxSize()
+                            }
+                    ) {
+                        PlayerScreen(
+                            request = request,
+                            onClose = shell::closePlayer,
+                            mini = mini,
+                            onMini = shell::shrinkPlayer,
+                            onFull = shell::growPlayer,
+                        )
+                    }
+                }
             }
             shell.overlay?.let { content -> Box(modifier = Modifier.fillMaxSize()) { content() } }
             SnackbarHost(

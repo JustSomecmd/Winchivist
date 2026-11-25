@@ -375,6 +375,8 @@ class AudioPlayer(private val app: AppGraph) {
         // Speeds up without changing the pitch, as mpv does by default, said here to be sure
         add("audio-pitch-correction" to "yes")
         add("speed" to String.format(Locale.ROOT, "%.2f", app.settings.audioSpeed))
+        // As loud as the last thing played was left, in this player or the video's
+        add("volume" to app.settings.playerVolume.toString())
         Languages.forMpv(app.settings.audioLanguage)?.let { add("alang" to it) }
         add("media-controls" to "yes")
     }

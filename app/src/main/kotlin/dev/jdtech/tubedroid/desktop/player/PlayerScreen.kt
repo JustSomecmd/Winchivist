@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -128,7 +129,7 @@ internal class PlayerSession(
     var paused by mutableStateOf(false)
         private set
 
-    var volume by mutableStateOf(100.0)
+    var volume by mutableStateOf(settings.playerVolume.toDouble())
         private set
 
     var muted by mutableStateOf(false)
@@ -173,6 +174,7 @@ internal class PlayerSession(
         get() =
             upNext != null &&
                 settings.autoplay &&
+                !loopVideo &&
                 !upNextCancelled &&
                 sleep?.atEnd != true &&
                 duration > 0 &&
@@ -203,6 +205,7 @@ internal class PlayerSession(
     fun sleepIn(minutes: Int) {
         endFade()
         sleep = Sleep(endsAt = System.currentTimeMillis() + minutes * 60_000L)
+        applyLoop()
     }
 
     /** Moves a running sleep timer by [minutes], which can be less than none. */
@@ -217,11 +220,31 @@ internal class PlayerSession(
     fun sleepAtEnd() {
         endFade()
         sleep = Sleep(atEnd = true)
+        applyLoop()
     }
 
     fun cancelSleep() {
         endFade()
         sleep = null
+        applyLoop()
+    }
+
+    /**
+     * Whether what plays starts over when it ends, until this is turned off or the player is
+     * closed. Nothing plays after it then.
+     */
+    var loopVideo by mutableStateOf(false)
+        private set
+
+    fun changeLoopVideo(on: Boolean) {
+        loopVideo = on
+        applyLoop()
+    }
+
+    // mpv starts the file over by itself, without a gap. A sleep timer for the end of the video
+    // comes first: that end is then the end
+    private fun applyLoop() {
+        player?.set("loop-file", if (loopVideo && sleep?.atEnd != true) "inf" else "no")
     }
 
     private fun checkSleep(player: MpvPlayer, now: Long) {
@@ -350,10 +373,18 @@ internal class PlayerSession(
 
     fun changeVolume(value: Double) {
         volume = value
+        rememberVolume(value)
         if (muted) player?.set("mute", "no")
         // While a sleep timer fades the sound out, this is what it fades from
         if (fadeFrom != null) fadeFrom = value
         else player?.set("volume", String.format(Locale.ROOT, "%.0f", value))
+    }
+
+    // The volume is the app's rather than one video's: whatever plays next, in either player,
+    // starts at it
+    private fun rememberVolume(value: Double) {
+        val level = value.roundToInt().coerceIn(0, 100)
+        if (settings.playerVolume != level) settings.playerVolume = level
     }
 
     fun toggleMute() {
@@ -527,6 +558,8 @@ internal class PlayerSession(
         player.set("force-media-title", item.title)
         // mpv pauses at the end of what it played last, and would stay paused for this one
         player.set("pause", "no")
+        // A player that played something else before can still be looping that
+        applyLoop()
         // One header as it is, commas and all, rather than a list split at the commas
         player.command("change-list", "http-header-fields", "clr", "")
         item.header?.let { player.command("change-list", "http-header-fields", "append", it) }
@@ -591,6 +624,9 @@ internal class PlayerSession(
         loading = false
         val player = player ?: return
         val item = item ?: return
+        // mpv starts a looping file over from its start option, which was where this one was
+        // picked up. It has done its work, and without it the loop goes back to the beginning
+        player.set("start", "none")
         item.subtitles.forEach { subtitle ->
             player.command("sub-add", subtitle.url, "auto", subtitle.title, subtitle.language ?: "")
         }
@@ -612,6 +648,7 @@ internal class PlayerSession(
     /** Reads mpv's state, then acts on it. Called a few times a second. */
     fun tick(onFullscreen: (Boolean) -> Unit) {
         val player = player ?: return
+        val before = position
         player.getDouble("time-pos")?.let { position = it }
         player.getDouble("duration")?.let { duration = it }
         val wantsFullscreen = player.getFlag("fullscreen")
@@ -622,12 +659,25 @@ internal class PlayerSession(
         val pausedBefore = paused
         paused = player.getFlag("pause")
         muted = player.getFlag("mute")
-        player.getDouble("volume")?.let { if (fadeFrom == null) volume = it }
+        // Set from elsewhere too, such as with mpv's own keys; not while a sleep timer fades it
+        player.getDouble("volume")?.let {
+            if (fadeFrom == null) {
+                volume = it
+                rememberVolume(it)
+            }
+        }
         player.getDouble("speed")?.let { speed = it }
         subtitleId = player.get("sid")?.toIntOrNull()
         audioId = player.get("aid")?.toIntOrNull()
         // Until the new file has loaded, mpv's state can still be the last one's
         if (loading) return
+        // A looping video that has started over has its segments to skip again
+        val startedOver =
+            loopVideo &&
+                position < before &&
+                position < LOOP_EDGE_SECONDS &&
+                before > duration - LOOP_EDGE_SECONDS
+        if (startedOver) skippedSegment = null
         checkSegment(player)
         val now = System.currentTimeMillis()
         if (paused && !pausedBefore) {
@@ -702,6 +752,7 @@ internal class PlayerSession(
         if (sleep?.atEnd == true) {
             // The sleep timer was for the end of this one, so nothing follows it
             sleep = null
+            applyLoop()
             return
         }
         if (settings.autoplay && upNext != null && !upNextCancelled) {
@@ -781,6 +832,9 @@ internal class PlayerSession(
         /** How long before the end the Up next card shows, in seconds. */
         private const val UP_NEXT_SECONDS = 20.0
 
+        // How near the end and the beginning a looping video is taken to have started over
+        private const val LOOP_EDGE_SECONDS = 3.0
+
         fun categoryName(category: String): String =
             when (category) {
                 "sponsor" -> "Sponsor"
@@ -803,9 +857,19 @@ internal class PlayerSession(
  * in a native window of its own that nothing in this window can be drawn over, so the controls sit
  * in a see-through window on top, kept over the video as the window moves. Turned off in the
  * settings, they go above and below the video instead.
+ *
+ * With [mini] it is the mini player: the video alone in a small box with a few controls, for a
+ * corner of the window while its pages are used. It's the same player made small, so the video
+ * plays on through the change; [onMini] and [onFull] ask for one and the other.
  */
 @Composable
-fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
+fun PlayerScreen(
+    request: PlayerRequest,
+    onClose: () -> Unit,
+    mini: Boolean = false,
+    onMini: () -> Unit = {},
+    onFull: () -> Unit = {},
+) {
     val app = LocalApp.current
     val navigator = LocalNavigator.current
     val windowState = LocalWindowState.current
@@ -814,6 +878,8 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
     val session =
         remember(request) { PlayerSession(playbackSource(app, request), app.settings, scope) }
     val close by rememberUpdatedState(onClose)
+    val small by rememberUpdatedState(mini)
+    val grow by rememberUpdatedState(onFull)
     val lib = remember { MpvLoader.load() }
     var placementBefore by remember { mutableStateOf(windowState.placement) }
 
@@ -837,15 +903,28 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
     LaunchedEffect(session, session.player) {
         if (session.player == null) return@LaunchedEffect
         while (isActive) {
-            session.tick(onFullscreen = ::setFullscreen)
+            session.tick(
+                onFullscreen = { on ->
+                    if (on && small) {
+                        // Asked of the small box, such as with a double click on mpv's picture:
+                        // that's for the whole player, not for a small box on an empty screen
+                        session.player?.set("fullscreen", "no")
+                        grow()
+                    } else {
+                        setFullscreen(on)
+                    }
+                }
+            )
             delay(250)
         }
     }
     DisposableEffect(Unit) { onDispose { setFullscreen(false) } }
 
     // Keys work wherever the focus is in the window. mpv's own keys don't reach it when it draws
-    // inside Winchivist, and a button that had the focus can be gone, such as in full screen
-    DisposableEffect(session) {
+    // inside Winchivist, and a button that had the focus can be gone, such as in full screen. Not
+    // for the mini player: the keys are then the pages', for typing in a search box, say
+    DisposableEffect(session, mini) {
+        if (mini) return@DisposableEffect onDispose {}
         val keys = KeyEventDispatcher { event ->
             event.id == KeyEvent.KEY_PRESSED &&
                 !event.isAltDown &&
@@ -880,6 +959,12 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
                 close()
                 if (sound != null) navigator.listen(sound)
             },
+            // Out of full screen first: the small box is for a window with pages in it
+            onMini = {
+                if (session.fullscreen) session.player?.set("fullscreen", "no")
+                onMini()
+            },
+            onFull = { grow() },
         )
     val video: @Composable () -> Unit = {
         MpvVideo(lib = lib, session = session, settings = app.settings, onShutdown = { close() })
@@ -890,11 +975,19 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
             appWindow != null &&
             lib != null &&
             !GraphicsEnvironment.isHeadless()
-    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    // Whole, it fills the window. Small, it's as wide as the mini player and as tall as a 16:9
+    // picture, plus its controls where those can't go over the picture
+    val size =
+        when {
+            !mini -> Modifier.fillMaxSize()
+            overlay -> Modifier.width(MINI_PLAYER_WIDTH).aspectRatio(16f / 9f)
+            else -> Modifier.width(MINI_PLAYER_WIDTH)
+        }
+    BoxWithConstraints(modifier = size.background(Color.Black)) {
         // Beside the video, which moves over and stays whole
         val transcriptWidth = minOf(maxWidth * TRANSCRIPT_SHARE, TRANSCRIPT_MAX_WIDTH)
         val transcript: @Composable () -> Unit = {
-            PlayerTranscript(session = session, width = transcriptWidth)
+            if (!mini) PlayerTranscript(session = session, width = transcriptWidth)
         }
         if (overlay) {
             var videoBounds by remember { mutableStateOf<Rect?>(null) }
@@ -912,7 +1005,8 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
             OverlayWindow(owner = appWindow!!, bounds = videoBounds) {
                 CompositionLocalProvider(LocalApp provides app) {
                     TubedroidTheme(accent = app.settings.accent) {
-                        PlayerOsd(session = session, actions = actions)
+                        if (mini) MiniOsd(session = session, actions = actions)
+                        else PlayerOsd(session = session, actions = actions)
                     }
                 }
             }
@@ -920,6 +1014,7 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
             PlayerWithBars(
                 session = session,
                 actions = actions,
+                mini = mini,
                 video = video,
                 transcript = transcript,
             )
@@ -927,12 +1022,18 @@ fun PlayerScreen(request: PlayerRequest, onClose: () -> Unit) {
     }
 }
 
+/** How wide the mini player's picture is. */
+val MINI_PLAYER_WIDTH = 400.dp
+
 /** What the player's controls can do beyond the video itself. */
 internal class PlayerActions(
     val onClose: () -> Unit,
     val onOpenPlaylistPage: () -> Unit = {},
     val onOpenPage: () -> Unit = {},
     val onSoundOnly: () -> Unit = {},
+    /** Makes it the mini player, and the whole player again. */
+    val onMini: () -> Unit = {},
+    val onFull: () -> Unit = {},
 )
 
 /**
@@ -990,23 +1091,36 @@ private val TRANSCRIPT_MAX_WIDTH = 420.dp
 
 /**
  * The controls above and below the video rather than over it, for when the window over the video
- * can't be shown. The playlist opens beside the video.
+ * can't be shown. The playlist opens beside the video. As the mini player it's the picture with one
+ * row of controls under it.
  */
 @Composable
 private fun PlayerWithBars(
     session: PlayerSession,
     actions: PlayerActions,
+    mini: Boolean,
     video: @Composable () -> Unit,
     transcript: @Composable () -> Unit,
 ) {
     val bars = MaterialTheme.colorScheme.surfaceContainerLowest
-    Column(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        OsdTop(
-            session = session,
-            actions = actions,
-            modifier = Modifier.background(bars).padding(horizontal = 12.dp, vertical = 6.dp),
-        )
-        Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
+    // The video stays where it is in this layout whichever size shows, so mpv's picture isn't
+    // taken away and made again between them
+    Column(
+        modifier = (if (mini) Modifier.fillMaxWidth() else Modifier.fillMaxSize()).background(bars)
+    ) {
+        if (!mini) {
+            OsdTop(
+                session = session,
+                actions = actions,
+                modifier = Modifier.background(bars).padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+        }
+        Row(
+            modifier =
+                (if (mini) Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                    else Modifier.weight(1f).fillMaxWidth())
+                    .background(Color.Black)
+        ) {
             Box(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 contentAlignment = Alignment.Center,
@@ -1014,7 +1128,7 @@ private fun PlayerWithBars(
                 video()
             }
             AnimatedVisibility(
-                visible = session.playlistOpen,
+                visible = session.playlistOpen && !mini,
                 enter = expandHorizontally(expandFrom = Alignment.Start),
                 exit = shrinkHorizontally(shrinkTowards = Alignment.Start),
             ) {
@@ -1031,13 +1145,17 @@ private fun PlayerWithBars(
             }
             transcript()
         }
-        Column(horizontalAlignment = Alignment.End, modifier = Modifier.background(bars)) {
-            OsdExtras(session = session, modifier = Modifier.padding(top = 8.dp, end = 20.dp))
-            OsdBottom(
-                session = session,
-                onMenu = {},
-                modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
-            )
+        if (mini) {
+            MiniBar(session = session, actions = actions)
+        } else {
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.background(bars)) {
+                OsdExtras(session = session, modifier = Modifier.padding(top = 8.dp, end = 20.dp))
+                OsdBottom(
+                    session = session,
+                    onMenu = {},
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                )
+            }
         }
     }
 }
@@ -1175,6 +1293,8 @@ private fun mpvOptions(settings: AppSettings): List<Pair<String, String>> = buil
     add("demuxer-seekable-cache" to "yes")
     add("demuxer-max-back-bytes" to "96MiB")
     add("hwdec" to settings.hardwareDecoding)
+    // As loud as the last thing played was left
+    add("volume" to settings.playerVolume.toString())
     // The languages picked in Settings, for the files whose tracks no server picks
     Languages.forMpv(settings.audioLanguage)?.let { add("alang" to it) }
     Languages.forMpv(settings.subtitleLanguage)?.let { add("slang" to it) }

@@ -36,6 +36,12 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
     var seekBackSeconds: Int by storedInt("seek_back_seconds", 10)
     var seekForwardSeconds: Int by storedInt("seek_forward_seconds", 10)
 
+    /**
+     * How loud the players are, 0 to 100, as last set in either of them. Whatever plays next starts
+     * at it.
+     */
+    var playerVolume: Int by storedInt("player_volume", 100)
+
     /** How fast the audio player plays, kept apart from the video player's speed. */
     var audioSpeed: Double
         get() = audioSpeedText.toDoubleOrNull()?.coerceIn(0.5, 3.0) ?: 1.0

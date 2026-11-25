@@ -8,6 +8,8 @@ desktop app uses.
 - Download videos and playlists on the server, and follow the download queue
 - Watch with Jellyfin-style controls over the video: chapters, subtitle and audio tracks, speed, skip buttons for
   SponsorBlock segments and Jellyfin's intros and credits, and Jellyfin's preview pictures on the seek bar
+- A mini player: the video in a small box in a corner of the window while you use the pages, and whole again with a
+  click. A video can loop, and the volume stays where you left it for whatever plays next
 - Pick up where you left off, and carry on with playlists where you stopped, also when you stopped on the phone:
   what was played last comes first, on whichever device that was
 - Jellyfin's movies and shows, played straight from the server's files, with its libraries, collections, playlists,

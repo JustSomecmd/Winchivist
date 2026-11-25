@@ -227,9 +227,182 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
 }
 
 /**
+ * The mini player's controls, over its picture: they show while the mouse is over it and while it's
+ * paused. The whole player again at the top left, close at the top right, play and seeking in the
+ * middle, and the title over a line for how far it is at the bottom. Clicking the picture pauses;
+ * double-clicking opens the whole player.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+internal fun MiniOsd(session: PlayerSession, actions: PlayerActions) {
+    val settings = LocalApp.current.settings
+    var inside by remember { mutableStateOf(false) }
+    val error = session.error
+    val shown = inside || session.paused || error != null
+    Box(
+        modifier =
+            Modifier.fillMaxSize()
+                // Barely there, so the clicks on the picture land here rather than on mpv
+                .background(Color.Black.copy(alpha = CLICK_CATCHER_ALPHA))
+                .onPointerEvent(PointerEventType.Enter) { inside = true }
+                .onPointerEvent(PointerEventType.Move) { inside = true }
+                .onPointerEvent(PointerEventType.Exit) { inside = false }
+                .pointerInput(session) {
+                    detectTapGestures(
+                        onTap = { session.togglePause() },
+                        onDoubleTap = { actions.onFull() },
+                    )
+                }
+    ) {
+        if (session.loading && error == null) {
+            CircularProgressIndicator(
+                color = Color.White,
+                modifier = Modifier.align(Alignment.Center).size(32.dp),
+            )
+        }
+        AnimatedVisibility(visible = shown, enter = fadeIn(), exit = fadeOut()) {
+            Box(modifier = Modifier.fillMaxSize().background(SHADE.copy(alpha = 0.5f))) {
+                Row(modifier = Modifier.align(Alignment.TopStart).padding(4.dp)) {
+                    OsdButton(
+                        icon = "ic_maximize",
+                        label = "Open the whole player",
+                        onClick = actions.onFull,
+                        size = 36.dp,
+                    )
+                }
+                Row(modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)) {
+                    OsdButton(
+                        icon = "ic_x",
+                        label = "Stop and close",
+                        onClick = actions.onClose,
+                        size = 36.dp,
+                    )
+                }
+                if (error != null) {
+                    Text(
+                        text = error,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.align(Alignment.Center).padding(Spacings.default),
+                    )
+                } else if (!session.loading) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Spacings.small),
+                        modifier = Modifier.align(Alignment.Center),
+                    ) {
+                        OsdButton(
+                            icon = "ic_rewind",
+                            label = "${settings.seekBackSeconds} seconds back",
+                            onClick = session::seekBack,
+                            size = 40.dp,
+                        )
+                        OsdButton(
+                            icon = if (session.paused) "ic_play" else "ic_pause",
+                            label = if (session.paused) "Play" else "Pause",
+                            onClick = session::togglePause,
+                            size = 52.dp,
+                        )
+                        OsdButton(
+                            icon = "ic_fast_forward",
+                            label = "${settings.seekForwardSeconds} seconds forward",
+                            onClick = session::seekForward,
+                            size = 40.dp,
+                        )
+                    }
+                }
+                Column(modifier = Modifier.align(Alignment.BottomStart)) {
+                    Text(
+                        text = session.item?.title.orEmpty(),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                    MiniProgress(session)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The mini player's controls in a row under its picture, for when nothing can go over the picture:
+ * the whole player again, seeking and play, the title, and close.
+ */
+@Composable
+internal fun MiniBar(session: PlayerSession, actions: PlayerActions) {
+    val settings = LocalApp.current.settings
+    Column {
+        MiniProgress(session)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+        ) {
+            OsdButton(
+                icon = "ic_maximize",
+                label = "Open the whole player",
+                onClick = actions.onFull,
+                size = 36.dp,
+            )
+            OsdButton(
+                icon = "ic_rewind",
+                label = "${settings.seekBackSeconds} seconds back",
+                onClick = session::seekBack,
+                size = 36.dp,
+            )
+            OsdButton(
+                icon = if (session.paused) "ic_play" else "ic_pause",
+                label = if (session.paused) "Play" else "Pause",
+                onClick = session::togglePause,
+                size = 36.dp,
+            )
+            OsdButton(
+                icon = "ic_fast_forward",
+                label = "${settings.seekForwardSeconds} seconds forward",
+                onClick = session::seekForward,
+                size = 36.dp,
+            )
+            Text(
+                text = session.error ?: session.item?.title.orEmpty(),
+                style = MaterialTheme.typography.labelLarge,
+                color = Color.White,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(horizontal = Spacings.small),
+            )
+            OsdButton(
+                icon = "ic_x",
+                label = "Stop and close",
+                onClick = actions.onClose,
+                size = 36.dp,
+            )
+        }
+    }
+}
+
+/** How far the video is, as a thin line across the mini player. */
+@Composable
+private fun MiniProgress(session: PlayerSession) {
+    val share =
+        if (session.duration > 0) (session.position / session.duration).coerceIn(0.0, 1.0) else 0.0
+    Box(
+        modifier = Modifier.fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = 0.25f))
+    ) {
+        Box(
+            modifier =
+                Modifier.fillMaxWidth(share.toFloat()).fillMaxHeight().background(barColor(session))
+        )
+    }
+}
+
+/**
  * The top of the controls: back, the title, which opens the page of what plays, and the channel or
  * show under it, smaller and in the accent. Then the buttons for a JRWI episode's transcript, for
- * going on with the sound alone, and for the playlist when one plays.
+ * going on with the sound alone, for the mini player, and for the playlist when one plays.
  */
 @Composable
 internal fun OsdTop(session: PlayerSession, actions: PlayerActions, modifier: Modifier = Modifier) {
@@ -284,6 +457,11 @@ private fun OsdTopRow(
         }
         if (item != null) {
             OsdButton(icon = "ic_headphones", label = "Sound only", onClick = actions.onSoundOnly)
+            OsdButton(
+                icon = "ic_picture_in_picture",
+                label = "Mini player",
+                onClick = actions.onMini,
+            )
         }
         if (session.hasPlaylist) {
             OsdButton(
@@ -539,7 +717,7 @@ internal enum class SettingsPage {
 /**
  * The player's settings, behind the cogwheel: the speed, the streaming quality for Jellyfin, a
  * sleep timer and the chapters, each opening its choices in the menu's place, then autoplay,
- * zooming the picture to fill the window, and mpv's playback info.
+ * looping the video, zooming the picture to fill the window, and mpv's playback info.
  */
 @Composable
 private fun SettingsMenu(session: PlayerSession, onMenu: (open: Boolean) -> Unit) {
@@ -586,6 +764,9 @@ internal fun PlayerSettings(
             }
             HorizontalDivider()
             ChoiceRow("Autoplay", settings.autoplay) { settings.autoplay = !settings.autoplay }
+            ChoiceRow("Loop this video", session.loopVideo) {
+                session.changeLoopVideo(!session.loopVideo)
+            }
             ChoiceRow("Zoom to fill", session.fills) { session.toggleFill() }
             ChoiceRow("Playback info", session.statsShown) {
                 session.toggleStats()

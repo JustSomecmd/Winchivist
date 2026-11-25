@@ -111,8 +111,8 @@ private fun AudioPage(look: AudioLook, content: @Composable () -> Unit) {
 
 /**
  * The audio player along the bottom of the window while something is loaded: its picture and title,
- * which open the full player, then back, play and forward, the place in it, the playlist when it
- * plays from one, and close.
+ * which open the full player, then back, play and forward, the place in it, the volume, the
+ * playlist when it plays from one, and close.
  */
 @Composable
 fun AudioBar(audio: AudioPlayer, modifier: Modifier = Modifier) {
@@ -197,6 +197,19 @@ fun AudioBar(audio: AudioPlayer, modifier: Modifier = Modifier) {
                     )
                     AudioTime(timeLeft(session) ?: formatDuration(session.duration))
                 }
+                Spacer(Modifier.width(Spacings.small))
+                // The volume, at hand without opening the player
+                RoundIconButton(
+                    icon = volumeIcon(session),
+                    label = if (session.muted) "Sound on" else "Mute",
+                    onClick = session::toggleMute,
+                )
+                ThinSlider(
+                    value = if (session.muted) 0f else (session.volume / 100).toFloat(),
+                    onChange = { session.changeVolume(it * 100.0) },
+                    modifier = Modifier.width(88.dp),
+                    accent = look.bar,
+                )
                 Spacer(Modifier.width(Spacings.small))
                 if (session.hasPlaylist) {
                     RoundIconButton(
@@ -338,6 +351,14 @@ fun AudioScreen(audio: AudioPlayer) {
         }
     }
 }
+
+/** The speaker as loud as the sound is: crossed out, with one wave, or with two. */
+private fun volumeIcon(session: PlayerSession): String =
+    when {
+        session.muted || session.volume <= 0 -> "ic_volume_0"
+        session.volume < 50 -> "ic_volume_50"
+        else -> "ic_volume"
+    }
 
 // The playlist and the transcript share one place in the player, so opening one closes the other
 private fun togglePlaylist(session: PlayerSession) {
@@ -482,6 +503,12 @@ private fun AudioControls(audio: AudioPlayer, session: PlayerSession, look: Audi
                     onClick = { toggleTranscript(session) },
                 )
             }
+            AudioButton(
+                icon = "ic_repeat_1",
+                label = if (session.loopVideo) "Stop looping this" else "Loop this",
+                lit = session.loopVideo,
+                onClick = { session.changeLoopVideo(!session.loopVideo) },
+            )
             if (session.hasPlaylist) {
                 AudioButton(
                     icon = "ic_list_video",
@@ -512,12 +539,7 @@ private fun AudioControls(audio: AudioPlayer, session: PlayerSession, look: Audi
             }
             Spacer(Modifier.width(Spacings.small))
             RoundIconButton(
-                icon =
-                    when {
-                        session.muted || session.volume <= 0 -> "ic_volume_0"
-                        session.volume < 50 -> "ic_volume_50"
-                        else -> "ic_volume"
-                    },
+                icon = volumeIcon(session),
                 label = if (session.muted) "Sound on" else "Mute",
                 onClick = session::toggleMute,
             )
@@ -528,12 +550,13 @@ private fun AudioControls(audio: AudioPlayer, session: PlayerSession, look: Audi
                 accent = look.bar,
             )
         }
-        // What plays when this one ends, while that's on
+        // What happens when this one ends: it stops, starts over, or the next one plays
         val next = session.upNext
         Text(
             text =
                 when {
                     session.sleep?.atEnd == true -> "Stops at the end"
+                    session.loopVideo -> "Starts over at the end"
                     next != null && app.settings.autoplay -> "Next: $next"
                     else -> ""
                 },
