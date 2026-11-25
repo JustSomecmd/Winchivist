@@ -253,7 +253,7 @@ private fun PlaylistHeader(model: PlaylistModel, playlist: TaPlaylist, playlistI
         },
         details = {
             playlist.description
-                ?.takeIf { it.isNotBlank() }
+                ?.takeIf { it.isNotBlank() && it != NO_DESCRIPTION }
                 ?.let {
                     Text(
                         text = it,
@@ -266,3 +266,9 @@ private fun PlaylistHeader(model: PlaylistModel, playlist: TaPlaylist, playlistI
         },
     )
 }
+
+/**
+ * What TubeArchivist gives as the description of a playlist made by hand, in any app: it keeps
+ * `false` there for "none", and its API writes that out as this word. It isn't a description.
+ */
+private const val NO_DESCRIPTION = "False"
