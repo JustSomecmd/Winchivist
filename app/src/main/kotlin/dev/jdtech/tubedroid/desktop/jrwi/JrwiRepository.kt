@@ -96,6 +96,13 @@ class JrwiRepository(
     /** Whether [item] counts as watched. */
     fun finished(item: JrwiItem): Boolean = progressOf(item)?.finished == true
 
+    /**
+     * What the archive held for [item] right after this app last saved its place there. Null when
+     * it hasn't saved one, and while a save is still waiting to be sent.
+     */
+    fun keptFor(item: JrwiItem): JrwiProgress? =
+        saved[item.itemId ?: item.id]?.takeIf { it.updatedAt != null }
+
     /** How far through [item] it was played, from 0 to 1; null unless partly played. */
     fun playedFraction(item: JrwiItem): Float? {
         val progress = progressOf(item)?.takeIf { !it.finished && it.position > 0 } ?: return null

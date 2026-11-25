@@ -148,6 +148,11 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
                 modifier = Modifier.align(Alignment.Center).size(48.dp),
             )
         }
+        // Said whether or not the controls show
+        OsdNotice(
+            session.notice,
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 76.dp),
+        )
         session.error?.let { error ->
             Text(
                 text = error,
@@ -224,6 +229,25 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
             )
         }
     }
+}
+
+/**
+ * Something the player has to say for a moment, such as that it went to where another device left
+ * off: a line on a dark pill.
+ */
+@Composable
+internal fun OsdNotice(text: String?, modifier: Modifier = Modifier) {
+    if (text == null) return
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = Color.White,
+        modifier =
+            modifier
+                .clip(RoundedCornerShape(50))
+                .background(SHADE.copy(alpha = 0.8f))
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+    )
 }
 
 /**

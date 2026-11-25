@@ -92,6 +92,7 @@ import dev.jdtech.tubedroid.desktop.screens.TaServerSettingsScreen
 import dev.jdtech.tubedroid.desktop.screens.VideoScreen
 import dev.jdtech.tubedroid.desktop.screens.VideosScreen
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
+import dev.jdtech.tubedroid.desktop.ui.OnComingBack
 import dev.jdtech.tubedroid.desktop.ui.ServerSideTheme
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.WinchivistLogo
@@ -243,6 +244,11 @@ fun ShellContent(shell: Shell) {
         ) {
             val request = shell.player
             val audio = LocalApp.current.audio
+            // Back at the window with something paused in the audio player: another device may
+            // have gone on with it since. The video player does the same for itself
+            OnComingBack(LocalAppWindow.current) {
+                audio.session?.let { if (it.paused) it.catchUp() }
+            }
             // What the compute box has to say after a yes to its question, wherever that was given
             val compute = LocalApp.current.compute
             LaunchedEffect(compute.notice) {

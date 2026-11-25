@@ -118,6 +118,10 @@ private fun AudioPage(look: AudioLook, content: @Composable () -> Unit) {
 fun AudioBar(audio: AudioPlayer, modifier: Modifier = Modifier) {
     val session = audio.session ?: return
     val settings = LocalApp.current.settings
+    // Where it went when another device had gone on with it, said at the bottom of the window
+    val navigator = LocalNavigator.current
+    val notice = session.notice
+    LaunchedEffect(notice) { notice?.let(navigator::message) }
     val item = session.item
     AudioLooks(jrwi = item?.jrwi != null) { look ->
         Surface(color = look.surface, modifier = modifier.fillMaxWidth()) {

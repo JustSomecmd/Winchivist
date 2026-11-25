@@ -49,9 +49,11 @@ import dev.jdtech.tubedroid.desktop.LocalWindowState
 import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.jellyfin.Languages
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiTheme
+import dev.jdtech.tubedroid.desktop.ui.OnComingBack
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.TubedroidTheme
 import dev.jdtech.tubedroid.desktop.ui.errorText
+import dev.jdtech.tubedroid.desktop.ui.formatDuration
 import java.awt.Canvas
 import java.awt.GraphicsEnvironment
 import java.awt.IllegalComponentStateException
@@ -64,6 +66,7 @@ import java.awt.event.KeyEvent
 import java.util.Locale
 import javax.swing.RootPaneContainer
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.abs
 import kotlin.math.roundToInt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +76,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /** A SponsorBlock segment that can be skipped, in seconds. */
@@ -344,13 +348,65 @@ internal class PlayerSession(
     }
 
     fun togglePause() {
-        // Played again after a long pause, the sound goes back a little, to pick up the thread
         val since = pausedAt
-        if (audio && paused && since != null) {
+        if (paused && since != null) {
             pausedAt = null
-            if (System.currentTimeMillis() - since >= REWIND_AFTER_PAUSE_MS) seekBy(-REWIND_SECONDS)
+            playedAgainAfter(System.currentTimeMillis() - since)
         }
         player?.command("cycle", "pause")
+    }
+
+    // Played again after [pausedMs] of pause
+    private fun playedAgainAfter(pausedMs: Long) {
+        // After a long one, the sound goes back a little, to pick up the thread
+        if (audio && pausedMs >= REWIND_AFTER_PAUSE_MS) seekBy(-REWIND_SECONDS)
+        // And another device may have gone on with it meanwhile
+        if (pausedMs >= CATCH_UP_AFTER_PAUSE_MS) catchUp()
+    }
+
+    /**
+     * Something to say to whoever watches, for a few seconds: that it went to where another device
+     * left off.
+     */
+    var notice by mutableStateOf<String?>(null)
+        private set
+
+    private var catchingUp: Job? = null
+
+    /**
+     * Asks the server whether another device left this somewhere else since this player last saved
+     * its place, and goes there if one did. For a player that was left alone: when the window is
+     * come back to while it's paused, and when it plays again after a long pause. While it plays
+     * there's nothing to ask, as the newest place is then its own.
+     */
+    fun catchUp() {
+        val current = item ?: return
+        if (loading || ended || catchingUp?.isActive == true) return
+        // Nothing is saved while the answer is on its way: that would put this player's older
+        // place over the newer one before it's read
+        lastReport = System.currentTimeMillis()
+        catchingUp = scope.launch {
+            val place =
+                try {
+                    withTimeoutOrNull(CATCH_UP_WAIT_MS) {
+                        withContext(Dispatchers.IO) { source.newerPlace(current) }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                } ?: return@launch
+            // Something else plays by now, or it's there already
+            if (item?.id != current.id || abs(place - position) < CATCH_UP_NEAR_SECONDS) {
+                return@launch
+            }
+            seekTo(place)
+            lastReport = System.currentTimeMillis()
+            val text = "Went to ${formatDuration(place)}, where another device left off"
+            notice = text
+            delay(NOTICE_MS)
+            if (notice == text) notice = null
+        }
     }
 
     fun pause() {
@@ -686,12 +742,10 @@ internal class PlayerSession(
             lastReport = now
             reportProgress(position, paused = true)
         } else if (!paused && pausedBefore) {
-            // Played again from elsewhere, such as a media key, after a long pause
+            // Played again from elsewhere, such as a media key
             val since = pausedAt
             pausedAt = null
-            if (audio && since != null && now - since >= REWIND_AFTER_PAUSE_MS) {
-                seekBy(-REWIND_SECONDS)
-            }
+            if (since != null) playedAgainAfter(now - since)
         } else if (!paused && now - lastReport > PROGRESS_INTERVAL_MS) {
             lastReport = now
             reportProgress(position, paused = false)
@@ -835,6 +889,13 @@ internal class PlayerSession(
         // How near the end and the beginning a looping video is taken to have started over
         private const val LOOP_EDGE_SECONDS = 3.0
 
+        // Going to another device's place: asked when played again after this long a pause, waited
+        // for this long at most, not gone to when it's this near, and said for this long
+        private const val CATCH_UP_AFTER_PAUSE_MS = 60_000L
+        private const val CATCH_UP_WAIT_MS = 4_000L
+        private const val CATCH_UP_NEAR_SECONDS = 2.0
+        private const val NOTICE_MS = 6_000L
+
         fun categoryName(category: String): String =
             when (category) {
                 "sponsor" -> "Sponsor"
@@ -919,6 +980,13 @@ fun PlayerScreen(
         }
     }
     DisposableEffect(Unit) { onDispose { setFullscreen(false) } }
+
+    // Back at the window with the video paused: another device may have gone on with it since.
+    // While it plays, the newest place is this player's own
+    OnComingBack(appWindow) { if (session.paused) session.catchUp() }
+    // Where it went is said over the video; around the mini player the window's own line shows
+    val notice = session.notice
+    LaunchedEffect(notice) { if (notice != null && small) navigator.message(notice) }
 
     // Keys work wherever the focus is in the window. mpv's own keys don't reach it when it draws
     // inside Winchivist, and a button that had the focus can be gone, such as in full screen. Not
@@ -1149,6 +1217,7 @@ private fun PlayerWithBars(
             MiniBar(session = session, actions = actions)
         } else {
             Column(horizontalAlignment = Alignment.End, modifier = Modifier.background(bars)) {
+                OsdNotice(session.notice, modifier = Modifier.padding(top = 8.dp, end = 20.dp))
                 OsdExtras(session = session, modifier = Modifier.padding(top = 8.dp, end = 20.dp))
                 OsdBottom(
                     session = session,

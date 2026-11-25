@@ -23,6 +23,9 @@ internal class JrwiPlaybackSource(
     private val items = ConcurrentHashMap<String, JrwiItem>()
     private var lastSaved = 0L
 
+    // The archive's time on each thing's place when it last took this player's save
+    private val told = ConcurrentHashMap<String, String>()
+
     // The episode after the one playing, looked up once: its ID, then what follows it, if anything
     private var following: Pair<Long, JrwiItem?>? = null
 
@@ -116,7 +119,48 @@ internal class JrwiPlaybackSource(
         } else {
             repository.videoPlayed(item, report.seconds, report.duration, ended)
         }
+        told.noteSave(play.id, repository, item)
     }
+
+    override suspend fun newerPlace(item: PlayItem): Double? {
+        val episode = items[item.id] ?: return null
+        return archiveMovedOn(repository, episode, request.audio, told, item.id)
+    }
+}
+
+// Remembers the archive's time on [item]'s place after this player's save, or forgets it when the
+// save hasn't got through: it then can't be told from another device's
+private fun MutableMap<String, String>.noteSave(
+    key: String,
+    repository: JrwiRepository,
+    item: JrwiItem,
+) {
+    val at = repository.keptFor(item)?.updatedAt
+    if (at != null) put(key, at) else remove(key)
+}
+
+/**
+ * Where the archive has [episode] now, in the timeline of its video or, with [audio], its audio,
+ * when something other than this player saved that: the archive's time on it is then another than
+ * the one it gave this player's last save, kept in [told] under [key]. Times are compared rather
+ * than places, so it needs no margin and not this PC's clock. Null when nothing else saved since,
+ * when this player hasn't saved yet, when the archive counts the episode as finished or has it at
+ * its start, and when the archive can't be reached.
+ */
+private suspend fun archiveMovedOn(
+    repository: JrwiRepository,
+    episode: JrwiItem,
+    audio: Boolean,
+    told: MutableMap<String, String>,
+    key: String,
+): Double? {
+    val mine = told[key] ?: return null
+    val theirs = repository.progress(episode, audio) ?: return null
+    val at = theirs.updatedAt ?: return null
+    if (at == mine) return null
+    // Known from here on, so it's gone to once
+    told[key] = at
+    return theirs.position.takeIf { !theirs.finished && it > 0 }
 }
 
 /**
@@ -133,6 +177,9 @@ internal class JrwiLinkedSource(
 ) : PlaybackSource by inner {
     private val items = ConcurrentHashMap<String, JrwiItem>()
     private var lastSaved = 0L
+
+    // The archive's time on each thing's place when it last took this player's save
+    private val told = ConcurrentHashMap<String, String>()
 
     override suspend fun first(): PlayItem = link(inner.first(), resume = resume)
 
@@ -195,6 +242,15 @@ internal class JrwiLinkedSource(
         items[item.id]?.let { repository.videoPlayed(it, 0.0, null, ended = true) }
     }
 
+    /**
+     * For one of the archive's episodes the archive is asked, as its pages start the episode from
+     * the archive's place; for anything else, the server it plays from.
+     */
+    override suspend fun newerPlace(item: PlayItem): Double? {
+        val episode = items[item.id] ?: return inner.newerPlace(item)
+        return archiveMovedOn(repository, episode, audio = false, told, item.id)
+    }
+
     private suspend fun archive(play: PlayItem, report: PlaybackReport, always: Boolean) {
         val item = items[play.id] ?: return
         val now = System.currentTimeMillis()
@@ -202,6 +258,7 @@ internal class JrwiLinkedSource(
         lastSaved = now
         val nowWatched =
             repository.videoPlayed(item, report.seconds, report.duration, ended = false)
+        told.noteSave(play.id, repository, item)
         // The archive decides when an episode counts as watched; the video's own copy follows
         if (nowWatched) repository.markVideoPlayed(item)
     }

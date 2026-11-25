@@ -13,6 +13,7 @@ import dev.jdtech.tubedroid.desktop.jellyfin.Languages
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.math.abs
 import org.jellyfin.sdk.model.api.BaseItemDto
 import org.jellyfin.sdk.model.api.BaseItemKind
 import org.jellyfin.sdk.model.api.ImageType
@@ -163,6 +164,13 @@ internal interface PlaybackSource {
     /** Played to the end: marked as watched. */
     suspend fun ended(item: PlayItem)
 
+    /**
+     * Where another device left [item], in seconds in what plays, when one saved its place on the
+     * server since this player last did. Null when none did, when this player hasn't saved a place
+     * yet, when the server has it at its start or as watched, and when it can't be told.
+     */
+    suspend fun newerPlace(item: PlayItem): Double? = null
+
     /** Whether this plays a playlist, which can start over after its last video. */
     val isPlaylist: Boolean
         get() = false
@@ -198,6 +206,9 @@ internal class TaPlaybackSource(
     private var name = ""
     // The channel of each video played, for finding the video in Jellyfin
     private val channels = ConcurrentHashMap<String, TaChannel>()
+
+    // Where this player last told TubeArchivist each video was, once it took it
+    private val told = ConcurrentHashMap<String, Double>()
 
     override val playlistName: String
         get() = name
@@ -284,6 +295,21 @@ internal class TaPlaybackSource(
 
     override suspend fun progress(item: PlayItem, report: PlaybackReport) {
         api.postProgress(item.id, report.seconds)
+        told[item.id] = report.seconds
+    }
+
+    /**
+     * TubeArchivist keeps a video's place without saying when it was saved, so another device's
+     * save shows as a place away from the one this player last told it.
+     */
+    override suspend fun newerPlace(item: PlayItem): Double? {
+        val mine = told[item.id] ?: return null
+        val player = api.getVideo(item.id).player ?: return null
+        val theirs = player.position ?: return null
+        if (player.watched || theirs <= 0 || abs(theirs - mine) <= SAME_PLACE_SECONDS) return null
+        // Known from here on, so it's gone to once
+        told[item.id] = theirs
+        return theirs
     }
 
     /** Where it was left goes to Jellyfin's copy too, as it does when the phone app plays it. */
@@ -431,10 +457,29 @@ internal class JellyfinPlaybackSource(
 
     override suspend fun progress(item: PlayItem, report: PlaybackReport) {
         client.reportProgress(state(item, report))
+        told[item.id] = report.seconds
     }
 
     override suspend fun stopped(item: PlayItem, report: PlaybackReport) {
         client.reportStop(state(item, report))
+        told[item.id] = report.seconds
+    }
+
+    // Where this player last told Jellyfin each item was, once it took it
+    private val told = ConcurrentHashMap<String, Double>()
+
+    /**
+     * Jellyfin's place for the item away from the one this player last told it: another device's.
+     * At its start it's left alone, which is where Jellyfin puts a video played to its end or
+     * barely begun.
+     */
+    override suspend fun newerPlace(item: PlayItem): Double? {
+        val mine = told[item.id] ?: return null
+        val userData = client.item(UUID.fromString(item.id)).userData ?: return null
+        val theirs = JellyfinClient.seconds(userData.playbackPositionTicks)
+        if (theirs <= 0 || abs(theirs - mine) <= SAME_PLACE_SECONDS) return null
+        told[item.id] = theirs
+        return theirs
     }
 
     override suspend fun ended(item: PlayItem) {
@@ -664,3 +709,6 @@ internal fun episodeTitle(item: BaseItemDto, hideNumbers: Boolean): String {
             .joinToString(":")
     return listOf(number, item.name.orEmpty()).filter { it.isNotBlank() }.joinToString(" · ")
 }
+
+// How far a server's place has to be from the one this player told it to count as another device's
+private const val SAME_PLACE_SECONDS = 10.0
