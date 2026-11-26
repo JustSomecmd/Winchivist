@@ -146,6 +146,12 @@ class AppSettings(private val prefs: Preferences = Preferences.userRoot().node("
     /** Whether closing the window leaves Winchivist running in the system tray. */
     var keepInTray: Boolean by storedBoolean("keep_in_tray", false)
 
+    /**
+     * Whether the window has Winchivist's own bar in place of Windows' own. Read when Winchivist
+     * starts: a window can't change its frame once it shows.
+     */
+    var ownWindowBar: Boolean by storedBoolean("own_window_bar", true)
+
     /** Whether Windows starts Winchivist, in the tray, when the user signs in. */
     var startWithWindows: Boolean by storedBoolean("start_with_windows", false)
 

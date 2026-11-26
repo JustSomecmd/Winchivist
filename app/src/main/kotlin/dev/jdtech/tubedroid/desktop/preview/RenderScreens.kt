@@ -7,11 +7,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
@@ -75,7 +77,9 @@ import dev.jdtech.tubedroid.desktop.screens.SettingsGroup
 import dev.jdtech.tubedroid.desktop.screens.SettingsScreen
 import dev.jdtech.tubedroid.desktop.screens.VideoModel
 import dev.jdtech.tubedroid.desktop.screens.settingsGroup
+import dev.jdtech.tubedroid.desktop.ui.LocalOwnWindowBar
 import dev.jdtech.tubedroid.desktop.ui.TubedroidTheme
+import dev.jdtech.tubedroid.desktop.ui.WindowBar
 import dev.jdtech.tubedroid.desktop.ui.installImageLoader
 import java.awt.Color
 import java.awt.GradientPaint
@@ -131,8 +135,9 @@ fun main(args: Array<String>) {
                 CompositionLocalProvider(
                     LocalApp provides graph,
                     LocalWindowState provides WindowState(),
+                    LocalOwnWindowBar provides true,
                 ) {
-                    TubedroidTheme(accent = settings.accent) { ShellContent(shell) }
+                    TubedroidTheme(accent = settings.accent) { WindowWithBar(shell) }
                 }
             }
         var time = 0L
@@ -270,8 +275,9 @@ fun main(args: Array<String>) {
                     CompositionLocalProvider(
                         LocalApp provides graph,
                         LocalWindowState provides WindowState(),
+                        LocalOwnWindowBar provides true,
                     ) {
-                        TubedroidTheme(accent = settings.accent) { ShellContent(blockShell) }
+                        TubedroidTheme(accent = settings.accent) { WindowWithBar(blockShell) }
                     }
                 }
             val pages =
@@ -669,6 +675,17 @@ private object SampleData {
  * fail the ordinary way: a library missing from the app stops it with an error instead, which fails
  * the build here before it can stop the app.
  */
+/** The app as its window shows it: the window's own bar, and the pages under it. */
+@Composable
+private fun WindowWithBar(shell: Shell) {
+    Column(
+        modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLow)
+    ) {
+        WindowBar(state = LocalWindowState.current, window = null, onClose = {})
+        Box(modifier = Modifier.weight(1f).fillMaxWidth()) { ShellContent(shell) }
+    }
+}
+
 private fun checkJellyfinSignIn(graph: AppGraph, url: String) {
     try {
         runBlocking { graph.jellyfin.signIn(url, "preview", "preview") }

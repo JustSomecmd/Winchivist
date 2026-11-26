@@ -1,12 +1,22 @@
 package dev.jdtech.tubedroid.desktop
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -19,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Notification
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.isTraySupported
@@ -26,10 +37,17 @@ import androidx.compose.ui.window.rememberTrayState
 import androidx.compose.ui.window.rememberWindowState
 import dev.jdtech.tubedroid.desktop.player.awaitPlaybackSaves
 import dev.jdtech.tubedroid.desktop.screens.SettingsScreen
+import dev.jdtech.tubedroid.desktop.ui.LocalOwnWindowBar
+import dev.jdtech.tubedroid.desktop.ui.OwnFrame
 import dev.jdtech.tubedroid.desktop.ui.TubedroidTheme
+import dev.jdtech.tubedroid.desktop.ui.WINDOW_EDGE
+import dev.jdtech.tubedroid.desktop.ui.WindowBar
 import dev.jdtech.tubedroid.desktop.ui.installImageLoader
 import dev.jdtech.tubedroid.desktop.ui.releaseImageMemory
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
 import javax.swing.SwingUtilities
+import kotlinx.coroutines.delay
 import org.jetbrains.skia.Image
 
 /** The window, so the player can make it fill the screen. */
@@ -72,6 +90,8 @@ fun main(args: Array<String>) {
             .start()
     }
 
+    // A window can't change its frame once it shows, so this is as it was at the start
+    val ownBar = settings.ownWindowBar
     val graph = AppGraph(settings)
     installImageLoader(graph.api, graph.jrwi.api, settings.imageCacheMb)
     val checks = BackgroundChecks(graph)
@@ -112,21 +132,25 @@ fun main(args: Array<String>) {
             }
         }
 
+        // What closing the window does, from Windows or from the window's own bar
+        val close: () -> Unit = {
+            if (tray && settings.keepInTray) {
+                // Sound keeps playing from the tray; a video has nowhere to show
+                shell.closePlayer()
+                switch.hide()
+                releaseImageMemory()
+            } else {
+                quit()
+            }
+        }
         if (switch.open) {
             Window(
-                onCloseRequest = {
-                    if (tray && settings.keepInTray) {
-                        // Sound keeps playing from the tray; a video has nowhere to show
-                        shell.closePlayer()
-                        switch.hide()
-                        releaseImageMemory()
-                    } else {
-                        quit()
-                    }
-                },
+                onCloseRequest = close,
                 state = windowState,
                 title = "Winchivist",
                 icon = icon,
+                // With its own bar the window has no frame of Windows' own
+                undecorated = ownBar,
                 onPreviewKeyEvent = { event ->
                     // Alt+Left goes back, as in a browser
                     if (
@@ -152,6 +176,7 @@ fun main(args: Array<String>) {
                 },
             ) {
                 window.minimumSize = java.awt.Dimension(960, 600)
+                if (ownBar) OwnWindowFrame(window, windowState)
                 LaunchedEffect(switch.shown) {
                     if (switch.shown > 0) {
                         windowState.isMinimized = false
@@ -167,22 +192,36 @@ fun main(args: Array<String>) {
                     LocalApp provides graph,
                     LocalWindowState provides windowState,
                     LocalAppWindow provides window,
+                    LocalOwnWindowBar provides ownBar,
                 ) {
                     TubedroidTheme(accent = graph.settings.accent) {
-                        // The first start asks for TubeArchivist; the other servers are in Settings
-                        var skipped by remember { mutableStateOf(false) }
-                        val anySetUp =
-                            graph.settings.isConfigured ||
-                                graph.settings.isJrwiConfigured ||
-                                graph.jellyfin.isSignedIn
-                        if (anySetUp || skipped) {
-                            ShellContent(shell)
-                        } else {
-                            SettingsScreen(
-                                firstRun = true,
-                                onDone = {},
-                                onSkip = { skipped = true },
-                            )
+                        Column(
+                            modifier =
+                                Modifier.fillMaxSize()
+                                    .background(MaterialTheme.colorScheme.surfaceContainerLow)
+                        ) {
+                            // Full screen is the video alone
+                            if (ownBar && windowState.placement != WindowPlacement.Fullscreen) {
+                                WindowBar(state = windowState, window = window, onClose = close)
+                            }
+                            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                                // The first start asks for TubeArchivist; the other servers are in
+                                // Settings
+                                var skipped by remember { mutableStateOf(false) }
+                                val anySetUp =
+                                    graph.settings.isConfigured ||
+                                        graph.settings.isJrwiConfigured ||
+                                        graph.jellyfin.isSignedIn
+                                if (anySetUp || skipped) {
+                                    ShellContent(shell)
+                                } else {
+                                    SettingsScreen(
+                                        firstRun = true,
+                                        onDone = {},
+                                        onSkip = { skipped = true },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -191,7 +230,40 @@ fun main(args: Array<String>) {
     }
 }
 
-/** The logo in the window's title bar and on the taskbar, as in the installer. */
+/**
+ * Looks after a window that has Winchivist's own bar, in the things Windows' frame did for it:
+ * where it goes when maximized, where its edges can be pulled, and its corners.
+ */
+@Composable
+private fun OwnWindowFrame(window: ComposeWindow, state: WindowState) {
+    val placement = state.placement
+    LaunchedEffect(window, placement) {
+        val floating = placement == WindowPlacement.Floating
+        // Compose's edges for resizing don't know of a maximized window or of full screen, where
+        // pulling one would resize what fills the screen
+        window.undecoratedResizerThickness = if (floating) WINDOW_EDGE else 0.dp
+        // At the very start the window isn't one of Windows' yet
+        var waited = 0
+        while (!window.isDisplayable && waited++ < 50) delay(100)
+        OwnFrame.roundCorners(window, round = floating)
+    }
+    // Kept right for the screen the window is on, for a maximize that doesn't come from the bar
+    DisposableEffect(window) {
+        val moved =
+            object : ComponentAdapter() {
+                override fun componentMoved(event: ComponentEvent) {
+                    if (window.placement == WindowPlacement.Floating) {
+                        OwnFrame.keepOffTheTaskbar(window)
+                    }
+                }
+            }
+        OwnFrame.keepOffTheTaskbar(window)
+        window.addComponentListener(moved)
+        onDispose { window.removeComponentListener(moved) }
+    }
+}
+
+/** The logo on the taskbar and in the bar of Windows' own, as in the installer. */
 private fun windowIcon(): Painter? {
     val bytes =
         Thread.currentThread().contextClassLoader?.getResourceAsStream("winchivist.png")?.use {

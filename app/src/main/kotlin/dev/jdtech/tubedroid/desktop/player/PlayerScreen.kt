@@ -52,6 +52,7 @@ import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.jellyfin.Languages
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiTheme
 import dev.jdtech.tubedroid.desktop.ui.OnComingBack
+import dev.jdtech.tubedroid.desktop.ui.OwnFrame
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.TubedroidTheme
 import dev.jdtech.tubedroid.desktop.ui.errorText
@@ -960,20 +961,9 @@ fun PlayerScreen(
         val now = window?.placement ?: windowState.placement
         if (on) {
             if (now != WindowPlacement.Fullscreen) placementBefore = now
-            windowState.placement = WindowPlacement.Fullscreen
+            OwnFrame.enterFullscreen(window, windowState)
         } else if (now == WindowPlacement.Fullscreen) {
-            val back =
-                placementBefore.takeIf { it != WindowPlacement.Fullscreen }
-                    ?: WindowPlacement.Floating
-            // Only Floating takes a Compose window out of full screen. Asked to be maximized, a
-            // window in full screen is marked as maximized and stays in full screen, so one that
-            // was maximized before never left it. It's taken out on the window itself, where that
-            // happens at once, and then put back as it was
-            if (window != null) {
-                window.placement = WindowPlacement.Floating
-                if (back != WindowPlacement.Floating) window.placement = back
-            }
-            windowState.placement = back
+            OwnFrame.leaveFullscreen(window, windowState, back = placementBefore)
         }
     }
 

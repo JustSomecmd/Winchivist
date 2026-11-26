@@ -53,6 +53,7 @@ import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.WindowPlacement
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinFavoritesScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinFolderScreen
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinHomeScreen
@@ -92,9 +93,11 @@ import dev.jdtech.tubedroid.desktop.screens.TaServerSettingsScreen
 import dev.jdtech.tubedroid.desktop.screens.VideoScreen
 import dev.jdtech.tubedroid.desktop.screens.VideosScreen
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
+import dev.jdtech.tubedroid.desktop.ui.LocalOwnWindowBar
 import dev.jdtech.tubedroid.desktop.ui.OnComingBack
 import dev.jdtech.tubedroid.desktop.ui.ServerSideTheme
 import dev.jdtech.tubedroid.desktop.ui.Spacings
+import dev.jdtech.tubedroid.desktop.ui.WINDOW_EDGE
 import dev.jdtech.tubedroid.desktop.ui.WinchivistLogo
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -300,6 +303,11 @@ fun ShellContent(shell: Shell) {
             if (request != null) {
                 // One player for both sizes, so the video plays on as it's made small or whole
                 // again. Another video is another player
+                // A window with its own bar is resized from just inside its edges, where the mouse
+                // doesn't get through a video's picture: the video keeps that far from them
+                val framed =
+                    LocalOwnWindowBar.current &&
+                        LocalWindowState.current.placement == WindowPlacement.Floating
                 key(request) {
                     Box(
                         modifier =
@@ -309,6 +317,13 @@ fun ShellContent(shell: Shell) {
                                     .shadow(16.dp)
                                     .background(MaterialTheme.colorScheme.outline)
                                     .padding(1.dp)
+                            } else if (framed) {
+                                Modifier.fillMaxSize()
+                                    .padding(
+                                        start = WINDOW_EDGE,
+                                        end = WINDOW_EDGE,
+                                        bottom = WINDOW_EDGE,
+                                    )
                             } else {
                                 Modifier.fillMaxSize()
                             }
@@ -382,18 +397,23 @@ private fun Sidebar(shell: Shell, available: List<Section>) {
                 .fillMaxHeight()
                 .background(MaterialTheme.colorScheme.surfaceContainerLow)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 10.dp),
-        ) {
-            WinchivistLogo(modifier = Modifier.size(32.dp))
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = "Winchivist",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+        if (LocalOwnWindowBar.current) {
+            // The logo and the name are in the window's own bar, right above
+            Spacer(Modifier.height(6.dp))
+        } else {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 20.dp, top = 14.dp, bottom = 10.dp),
+            ) {
+                WinchivistLogo(modifier = Modifier.size(32.dp))
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    text = "Winchivist",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
         }
         Column(
             verticalArrangement = Arrangement.spacedBy(8.dp),

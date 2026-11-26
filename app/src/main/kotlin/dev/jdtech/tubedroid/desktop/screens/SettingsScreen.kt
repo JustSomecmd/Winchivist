@@ -178,7 +178,17 @@ fun SettingsScreen(firstRun: Boolean, onDone: () -> Unit, onSkip: (() -> Unit)? 
                                     SettingsSection("Pictures") { ImageSettings(settings) }
                                 }
                                 SettingsGroup.APP -> {
-                                    SettingsSection("Appearance") { AccentPicker(settings) }
+                                    SettingsSection("Appearance") {
+                                        AccentPicker(settings)
+                                        SwitchRow(
+                                            title = "Winchivist's own window bar",
+                                            subtitle =
+                                                "In place of Windows' own bar along the top. " +
+                                                    "Changes the next time Winchivist starts",
+                                            checked = settings.ownWindowBar,
+                                            onChange = { settings.ownWindowBar = it },
+                                        )
+                                    }
                                     SettingsSection("About") {
                                         Text(
                                             text = "Winchivist ${appVersion()}",
