@@ -155,9 +155,9 @@ fun AudioBar(audio: AudioPlayer, modifier: Modifier = Modifier) {
                         Text(
                             text = error ?: item?.subtitle.orEmpty(),
                             style = MaterialTheme.typography.bodySmall,
+                            // The channel or show in the accent of what plays, as over a video
                             color =
-                                if (error != null) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                if (error != null) MaterialTheme.colorScheme.error else look.bar,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
@@ -429,7 +429,7 @@ private fun AudioControls(audio: AudioPlayer, session: PlayerSession, look: Audi
             Text(
                 text = subtitle,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = look.bar,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp),

@@ -15,8 +15,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.ImageComposeScene
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.WindowState
@@ -66,6 +68,7 @@ import dev.jdtech.tubedroid.desktop.player.PlayerSettings
 import dev.jdtech.tubedroid.desktop.player.PlaylistPanel
 import dev.jdtech.tubedroid.desktop.player.SettingsPage
 import dev.jdtech.tubedroid.desktop.player.TaPlaybackSource
+import dev.jdtech.tubedroid.desktop.player.playbackSource
 import dev.jdtech.tubedroid.desktop.screens.ChannelModel
 import dev.jdtech.tubedroid.desktop.screens.SearchModel
 import dev.jdtech.tubedroid.desktop.screens.SettingsGroup
@@ -76,6 +79,7 @@ import dev.jdtech.tubedroid.desktop.ui.TubedroidTheme
 import dev.jdtech.tubedroid.desktop.ui.installImageLoader
 import java.awt.Color
 import java.awt.GradientPaint
+import java.awt.event.KeyEvent
 import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -363,7 +367,7 @@ fun main(args: Array<String>) {
             duration = 790.0,
             chapters = listOf(150.0, 612.0),
         )
-        val osdScene =
+        fun osdSceneOf(session: PlayerSession) =
             ImageComposeScene(width = 1360, height = 860, density = Density(1f)) {
                 CompositionLocalProvider(LocalApp provides graph) {
                     TubedroidTheme(accent = settings.accent) {
@@ -379,21 +383,56 @@ fun main(args: Array<String>) {
                                         )
                                     )
                         ) {
-                            PlayerOsd(session = osdSession, actions = PlayerActions(onClose = {}))
+                            PlayerOsd(session = session, actions = PlayerActions(onClose = {}))
                         }
                     }
                 }
             }
-        repeat(16) {
-            osdScene.render(time)
-            time += 200_000_000L
-            delay(200)
+        // Draws [scene] for [turns] fifths of a second, then keeps the picture. With [mouse], the
+        // mouse is said to lie there at every turn, as Compose says it of a still one
+        suspend fun osdShot(
+            scene: ImageComposeScene,
+            name: String,
+            turns: Int,
+            mouse: Offset? = null,
+        ) {
+            repeat(turns) {
+                mouse?.let { scene.sendPointerEvent(PointerEventType.Move, it) }
+                scene.render(time)
+                time += 200_000_000L
+                delay(200)
+            }
+            scene.render(time).encodeToData(EncodedImageFormat.PNG)?.let {
+                File(output, "$name.png").writeBytes(it.bytes)
+            }
+            println("Rendered $name")
         }
-        osdScene.render(time).encodeToData(EncodedImageFormat.PNG)?.let {
-            File(output, "player-osd.png").writeBytes(it.bytes)
-        }
-        println("Rendered player-osd")
+        val osdScene = osdSceneOf(osdSession)
+        // In their first second
+        osdShot(osdScene, "player-osd", turns = 5)
+        // Four seconds on, with the mouse lying still on the bottom bar: faded, though it's paused
+        val restingAt = Offset(300f, 824f)
+        osdShot(osdScene, "player-osd-idle", turns = 20, mouse = restingAt)
+        // One of the player's keys brings them back
+        osdSession.onKey(KeyEvent.VK_C, onClose = {})
+        osdShot(osdScene, "player-osd-key", turns = 4, mouse = restingAt)
         osdScene.close()
+
+        // A JRWI episode's video: the show under its title in the archive's purple, as its bars
+        val jrwiOsdSession =
+            PlayerSession(
+                playbackSource(
+                    graph,
+                    PlayerRequest.Jrwi(SampleArchive.episodes[1].id, audio = false),
+                ),
+                settings,
+                this,
+            )
+        jrwiOsdSession.load()
+        jrwiOsdSession.showForPreview(position = 4192.0, duration = 11395.0, chapters = emptyList())
+        val jrwiOsdScene = osdSceneOf(jrwiOsdSession)
+        osdShot(jrwiOsdScene, "player-osd-jrwi", turns = 5)
+        jrwiOsdScene.close()
 
         // The mini player's controls over its picture, twice its size to be seen well
         val miniScene =

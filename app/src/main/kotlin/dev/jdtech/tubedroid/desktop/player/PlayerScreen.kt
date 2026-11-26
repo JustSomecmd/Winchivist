@@ -22,6 +22,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -460,6 +461,13 @@ internal class PlayerSession(
     }
 
     /**
+     * When one of the player's keys was last used. The controls show for a while after it, as they
+     * do after the mouse moves.
+     */
+    var keyUsedAt by mutableLongStateOf(0L)
+        private set
+
+    /**
      * The player's keys, as on YouTube and in mpv. Returns whether [keyCode] was one of them.
      * Escape leaves full screen, or else closes the player.
      */
@@ -481,6 +489,7 @@ internal class PlayerSession(
             KeyEvent.VK_ESCAPE -> if (fullscreen) player?.set("fullscreen", "no") else onClose()
             else -> return false
         }
+        keyUsedAt = System.currentTimeMillis()
         return true
     }
 

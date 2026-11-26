@@ -52,6 +52,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -60,8 +61,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
@@ -95,24 +98,42 @@ import kotlinx.coroutines.delay
 /**
  * The player's controls as Jellyfin's: over the video, with the title and channel at the top and
  * the seek bar and buttons at the bottom, on shadows that fade into the picture. They show when the
- * mouse moves and hide, with the mouse, after a while of playing. Clicking the picture pauses;
- * double-clicking switches full screen. Skip and up next sit at the bottom right on their own.
+ * mouse moves or one of the player's keys is used, and fade a while after the last of either,
+ * playing or paused, wherever the mouse lies. The mouse's pointer goes with them. Clicking the
+ * picture pauses; double-clicking switches full screen. Skip and up next sit at the bottom right on
+ * their own.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
-    var lastMove by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var shown by remember { mutableStateOf(true) }
+    val mouse = remember { MouseMoves() }
+    var mouseAt by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var held by remember { mutableStateOf(false) }
     var menus by remember { mutableIntStateOf(0) }
-    val controlsHover = remember { MutableInteractionSource() }
-    val onControls by controlsHover.collectIsHoveredAsState()
-    val keepShowing = session.paused || menus > 0 || onControls || session.loading
+    var shown by remember { mutableStateOf(true) }
+    var pointerShown by remember { mutableStateOf(true) }
+    // What keeps them however still the mouse is: an open menu, a mouse button held down, as on
+    // the seek bar, and an error, which has nothing playing behind it. The loop below reads this
+    // as it is now, not as it was when the loop started
+    val keep by rememberUpdatedState(menus > 0 || held || session.error != null)
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(session) {
         while (true) {
-            shown = keepShowing || System.currentTimeMillis() - lastMove < OSD_HIDE_AFTER_MS
+            val now = System.currentTimeMillis()
+            // A key shows the controls and leaves the pointer hidden
+            pointerShown = keep || now - mouseAt < OSD_HIDE_AFTER_MS
+            shown = pointerShown || now - session.keyUsedAt < OSD_HIDE_AFTER_MS
             delay(200)
         }
+    }
+    // A key shows them at once, not at the loop's next turn
+    val keyUsedAt = session.keyUsedAt
+    LaunchedEffect(keyUsedAt) { if (keyUsedAt > 0L) shown = true }
+
+    fun mouseUsed() {
+        mouseAt = System.currentTimeMillis()
+        shown = true
+        pointerShown = true
     }
 
     Box(
@@ -120,19 +141,26 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
             Modifier.fillMaxSize()
                 // Barely there, so the clicks on the picture land here rather than on mpv
                 .background(Color.Black.copy(alpha = CLICK_CATCHER_ALPHA))
-                .onPointerEvent(PointerEventType.Move) {
-                    lastMove = System.currentTimeMillis()
-                    shown = true
+                .onPointerEvent(PointerEventType.Move) { event ->
+                    held = event.changes.any { it.pressed }
+                    if (mouse.moved(event)) mouseUsed()
+                }
+                .onPointerEvent(PointerEventType.Press) {
+                    held = true
+                    mouseUsed()
+                }
+                .onPointerEvent(PointerEventType.Release) { event ->
+                    held = event.changes.any { it.pressed }
+                    mouseUsed()
                 }
                 .onPointerEvent(PointerEventType.Scroll) { event ->
+                    mouseUsed()
                     // The wheel sets the volume, unless a list under the mouse scrolled with it
                     val change = event.changes.firstOrNull() ?: return@onPointerEvent
                     val turned = change.scrollDelta.y
                     if (change.isConsumed || turned == 0f) return@onPointerEvent
                     val step = if (turned < 0) WHEEL_VOLUME_STEP else -WHEEL_VOLUME_STEP
                     session.changeVolume((session.volume + step).coerceIn(0.0, 100.0))
-                    lastMove = System.currentTimeMillis()
-                    shown = true
                 }
                 .pointerInput(session) {
                     detectTapGestures(
@@ -140,7 +168,11 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
                         onDoubleTap = { session.toggleFullscreen() },
                     )
                 }
-                .pointerHoverIcon(if (shown) PointerIcon.Default else hiddenPointer)
+                // Gone over the buttons too, which would show it until they've faded
+                .pointerHoverIcon(
+                    icon = if (pointerShown) PointerIcon.Default else hiddenPointer,
+                    overrideDescendants = !pointerShown,
+                )
     ) {
         if (session.loading && session.error == null) {
             CircularProgressIndicator(
@@ -175,8 +207,7 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
                 session = session,
                 actions = actions,
                 modifier =
-                    Modifier.hoverable(controlsHover)
-                        .background(
+                    Modifier.background(
                             Brush.verticalGradient(
                                 listOf(SHADE.copy(alpha = 0.75f), Color.Transparent)
                             )
@@ -198,8 +229,7 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
                     session = session,
                     onMenu = { open -> menus += if (open) 1 else -1 },
                     modifier =
-                        Modifier.hoverable(controlsHover)
-                            .background(
+                        Modifier.background(
                                 Brush.verticalGradient(
                                     listOf(Color.Transparent, SHADE.copy(alpha = 0.85f))
                                 )
@@ -224,8 +254,7 @@ internal fun PlayerOsd(session: PlayerSession, actions: PlayerActions) {
                 onLoopChange = session::changeLoop,
                 onOpenPage = actions.onOpenPlaylistPage,
                 onClose = session::togglePlaylist,
-                modifier =
-                    Modifier.fillMaxHeight().width(PLAYLIST_PANEL_WIDTH).hoverable(controlsHover),
+                modifier = Modifier.fillMaxHeight().width(PLAYLIST_PANEL_WIDTH),
             )
         }
     }
@@ -251,25 +280,48 @@ internal fun OsdNotice(text: String?, modifier: Modifier = Modifier) {
 }
 
 /**
- * The mini player's controls, over its picture: they show while the mouse is over it and while it's
- * paused. The whole player again at the top left, close at the top right, play and seeking in the
- * middle, and the title over a line for how far it is at the bottom. Clicking the picture pauses;
- * double-clicking opens the whole player.
+ * The mini player's controls, over its picture: they show while the mouse moves over it and while
+ * it's paused, which is all that says so there. A mouse left lying on it while it plays loses them,
+ * and its pointer, after as long as in the whole player. The whole player again at the top left,
+ * close at the top right, play and seeking in the middle, and the title over a line for how far it
+ * is at the bottom. Clicking the picture pauses; double-clicking opens the whole player.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun MiniOsd(session: PlayerSession, actions: PlayerActions) {
     val settings = LocalApp.current.settings
+    val mouse = remember { MouseMoves() }
     var inside by remember { mutableStateOf(false) }
+    var mouseAt by remember { mutableLongStateOf(0L) }
+    var still by remember { mutableStateOf(false) }
+    // Only looked at while the mouse is over it
+    LaunchedEffect(inside) {
+        while (inside) {
+            still = System.currentTimeMillis() - mouseAt >= OSD_HIDE_AFTER_MS
+            delay(200)
+        }
+    }
+
+    fun mouseUsed() {
+        mouseAt = System.currentTimeMillis()
+        still = false
+    }
     val error = session.error
-    val shown = inside || session.paused || error != null
+    val shown = (inside && !still) || session.paused || error != null
     Box(
         modifier =
             Modifier.fillMaxSize()
                 // Barely there, so the clicks on the picture land here rather than on mpv
                 .background(Color.Black.copy(alpha = CLICK_CATCHER_ALPHA))
-                .onPointerEvent(PointerEventType.Enter) { inside = true }
-                .onPointerEvent(PointerEventType.Move) { inside = true }
+                .onPointerEvent(PointerEventType.Enter) {
+                    inside = true
+                    mouseUsed()
+                }
+                .onPointerEvent(PointerEventType.Move) { event ->
+                    inside = true
+                    if (mouse.moved(event)) mouseUsed()
+                }
+                .onPointerEvent(PointerEventType.Press) { mouseUsed() }
                 .onPointerEvent(PointerEventType.Exit) { inside = false }
                 .pointerInput(session) {
                     detectTapGestures(
@@ -277,6 +329,10 @@ internal fun MiniOsd(session: PlayerSession, actions: PlayerActions) {
                         onDoubleTap = { actions.onFull() },
                     )
                 }
+                .pointerHoverIcon(
+                    icon = if (shown) PointerIcon.Default else hiddenPointer,
+                    overrideDescendants = !shown,
+                )
     ) {
         if (session.loading && error == null) {
             CircularProgressIndicator(
@@ -425,12 +481,16 @@ private fun MiniProgress(session: PlayerSession) {
 
 /**
  * The top of the controls: back, the title, which opens the page of what plays, and the channel or
- * show under it, smaller and in the accent. Then the buttons for a JRWI episode's transcript, for
- * going on with the sound alone, for the mini player, and for the playlist when one plays.
+ * show under it, smaller and in the accent of what plays. Then the buttons for a JRWI episode's
+ * transcript, for going on with the sound alone, for the mini player, and for the playlist when one
+ * plays.
  */
 @Composable
 internal fun OsdTop(session: PlayerSession, actions: PlayerActions, modifier: Modifier = Modifier) {
-    CompositionLocalProvider(LocalOsdAccent provides osdAccent(session)) {
+    CompositionLocalProvider(
+        LocalOsdAccent provides osdAccent(session),
+        LocalPlayerAccent provides barColor(session),
+    ) {
         OsdTopRow(session, actions, modifier)
     }
 }
@@ -464,7 +524,7 @@ private fun OsdTopRow(
                     Text(
                         text = subtitle,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
+                        color = barColor(session),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -509,7 +569,10 @@ internal fun OsdBottom(
     onMenu: (open: Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    CompositionLocalProvider(LocalOsdAccent provides osdAccent(session)) {
+    CompositionLocalProvider(
+        LocalOsdAccent provides osdAccent(session),
+        LocalPlayerAccent provides barColor(session),
+    ) {
         OsdBottomRows(session, onMenu, modifier)
     }
 }
@@ -729,6 +792,15 @@ internal val LocalOsdAccent = compositionLocalOf<Color?> { null }
 private fun osdAccent(session: PlayerSession): Color? =
     if (LocalApp.current.settings.accentControls) barColor(session) else null
 
+/**
+ * The accent of what plays, for what the controls draw in an accent whatever Settings asks of the
+ * buttons: a button that's on, and the tick at a menu's choice. Null outside the controls.
+ */
+private val LocalPlayerAccent = compositionLocalOf<Color?> { null }
+
+@Composable
+private fun playerAccent(): Color = LocalPlayerAccent.current ?: MaterialTheme.colorScheme.primary
+
 /** The settings menu's pages: the list of settings, or the choices of one of them. */
 internal enum class SettingsPage {
     MAIN,
@@ -918,7 +990,7 @@ private fun ChoiceRow(text: String, selected: Boolean, onClick: () -> Unit) {
                     AppIcon(
                         name = "ic_check",
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = playerAccent(),
                         modifier = Modifier.size(18.dp),
                     )
                 }
@@ -955,8 +1027,7 @@ internal fun OsdButton(
                 contentDescription = label,
                 tint =
                     when {
-                        accent == null ->
-                            if (lit) MaterialTheme.colorScheme.primary else Color.White
+                        accent == null -> if (lit) playerAccent() else Color.White
                         lit -> Color.White
                         else -> accent
                     },
@@ -1006,7 +1077,7 @@ private fun TrackMenu(
                                 AppIcon(
                                     name = "ic_check",
                                     contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = playerAccent(),
                                     modifier = Modifier.size(18.dp),
                                 )
                             }
@@ -1249,6 +1320,24 @@ private val SHADE = Color(0xFF000000)
 private const val CLICK_CATCHER_ALPHA = 0.012f
 
 private const val OSD_HIDE_AFTER_MS = 3_000L
+
+/**
+ * Tells a move of the mouse from what only looks like one. Compose can say "moved" again when what
+ * lies under a still mouse is laid out anew, which the time beside the seek bar is every second,
+ * and a mouse on a desk trembles. A move counts from [MOUSE_MOVED_PX] on.
+ */
+private class MouseMoves {
+    private var from = Offset.Unspecified
+
+    fun moved(event: PointerEvent): Boolean {
+        val at = event.changes.firstOrNull()?.position ?: return false
+        if (from.isSpecified && (at - from).getDistance() < MOUSE_MOVED_PX) return false
+        from = at
+        return true
+    }
+}
+
+private const val MOUSE_MOVED_PX = 4f
 
 /** No pointer, for while the controls are hidden over a playing video. */
 private val hiddenPointer: PointerIcon by lazy {
