@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.awt.ComposeDialog
+import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.awt.SwingPanel
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -954,14 +955,25 @@ fun PlayerScreen(
     var placementBefore by remember { mutableStateOf(windowState.placement) }
 
     fun setFullscreen(on: Boolean) {
+        val window = appWindow as? ComposeWindow
+        // The window itself says where it is, where there is one: what's kept of it can trail it
+        val now = window?.placement ?: windowState.placement
         if (on) {
-            if (windowState.placement != WindowPlacement.Fullscreen)
-                placementBefore = windowState.placement
+            if (now != WindowPlacement.Fullscreen) placementBefore = now
             windowState.placement = WindowPlacement.Fullscreen
-        } else if (windowState.placement == WindowPlacement.Fullscreen) {
-            windowState.placement =
+        } else if (now == WindowPlacement.Fullscreen) {
+            val back =
                 placementBefore.takeIf { it != WindowPlacement.Fullscreen }
                     ?: WindowPlacement.Floating
+            // Only Floating takes a Compose window out of full screen. Asked to be maximized, a
+            // window in full screen is marked as maximized and stays in full screen, so one that
+            // was maximized before never left it. It's taken out on the window itself, where that
+            // happens at once, and then put back as it was
+            if (window != null) {
+                window.placement = WindowPlacement.Floating
+                if (back != WindowPlacement.Floating) window.placement = back
+            }
+            windowState.placement = back
         }
     }
 
