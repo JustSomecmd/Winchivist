@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.WindowState
 import com.sun.net.httpserver.HttpServer
 import dev.jdtech.jellyfin.tubearchivist.TaBiggestChannel
@@ -439,6 +440,22 @@ fun main(args: Array<String>) {
         val jrwiOsdScene = osdSceneOf(jrwiOsdSession)
         osdShot(jrwiOsdScene, "player-osd-jrwi", turns = 5)
         jrwiOsdScene.close()
+
+        // The window's own bar as a maximized window has it, with the button that brings it back
+        val barScene =
+            ImageComposeScene(width = 1360, height = 32, density = Density(1f)) {
+                CompositionLocalProvider(LocalApp provides graph) {
+                    TubedroidTheme(accent = settings.accent) {
+                        WindowBar(
+                            state = WindowState(placement = WindowPlacement.Maximized),
+                            window = null,
+                            onClose = {},
+                        )
+                    }
+                }
+            }
+        osdShot(barScene, "window-bar-maximized", turns = 2)
+        barScene.close()
 
         // The mini player's controls over its picture, twice its size to be seen well
         val miniScene =
