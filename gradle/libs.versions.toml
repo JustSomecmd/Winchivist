@@ -9,7 +9,7 @@ kotlinx-serialization = "1.13.0"
 ktfmt = "0.27.0"
 okhttp = "5.5.1"
 jna = "5.18.1"
-jsoup = "1.21.1"
+jsoup = "1.24.1"
 slf4j = "2.0.20"
 
 [libraries]

@@ -54,6 +54,10 @@ jobs:
   windows:
     name: Windows installer
     runs-on: windows-latest
+    env:
+      # The installer carries its own Java. Java 17 older than this has the flaw in reading Base64
+      # known as Java4Shell (CVE-2026-114938), so a build that would carry one stops
+      JAVA_AT_LEAST: 17.0.21.1
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -62,6 +66,8 @@ jobs:
         with:
           java-version: 17
           distribution: temurin
+          # The newest Java 17 there is, where the runner's own copy can be months old
+          check-latest: true
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
@@ -84,6 +90,24 @@ jobs:
       - name: Build the installer
         shell: bash
         run: ./gradlew -PdesktopVersion=1.1.${{ github.run_number }} :app:packageMsi
+
+      - name: Check the Java in the installer
+        shell: bash
+        run: |
+          release=$(find app/build/compose -path '*/runtime/release' | head -n 1)
+          if [ -z "$release" ]; then echo "::error::The build holds no Java runtime to check"; exit 1; fi
+          found=$(tr -d '\r' < "$release" | sed -n 's/^JAVA_VERSION="\(.*\)"$/\1/p')
+          echo "The installer carries Java $found, from $release"
+          # The least version is one of Java 17's, and says nothing of another Java's updates
+          if [ "${found%%.*}" != "${JAVA_AT_LEAST%%.*}" ]; then
+            echo "::error::Java $found isn't a Java ${JAVA_AT_LEAST%%.*}: set JAVA_AT_LEAST for it"
+            exit 1
+          fi
+          oldest=$(printf '%s\n' "$JAVA_AT_LEAST" "$found" | sort -V | head -n 1)
+          if [ "$oldest" != "$JAVA_AT_LEAST" ]; then
+            echo "::error::Java $found is older than $JAVA_AT_LEAST"
+            exit 1
+          fi
 
       - name: Upload installer
         uses: actions/upload-artifact@v7
