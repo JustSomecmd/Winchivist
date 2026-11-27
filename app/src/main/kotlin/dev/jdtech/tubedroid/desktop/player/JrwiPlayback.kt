@@ -5,9 +5,13 @@ import dev.jdtech.tubedroid.desktop.AppGraph
 import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiMatch
 import dev.jdtech.tubedroid.desktop.jrwi.JrwiRepository
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * A JRWI episode played straight from the archive: its audio, or its archived video when Jellyfin
@@ -269,7 +273,49 @@ internal class JrwiLinkedSource(
  * connected, an episode of its that plays from TubeArchivist or Jellyfin keeps its place in the
  * archive too, and brings its transcript.
  */
-internal fun playbackSource(app: AppGraph, request: PlayerRequest): PlaybackSource {
+internal fun playbackSource(app: AppGraph, request: PlayerRequest): PlaybackSource =
+    FromThisPc(serverSource(app, request), app)
+
+/**
+ * Plays the copy on this PC of what [inner] would stream, when Winchivist downloaded it and it's
+ * still there. Everything else stays [inner]'s: what plays next, where the place is saved, the
+ * subtitles and the segments to skip.
+ */
+private class FromThisPc(private val inner: PlaybackSource, private val app: AppGraph) :
+    PlaybackSource by inner {
+    override suspend fun first(): PlayItem = onThisPc(inner.first())
+
+    override suspend fun next(current: PlayItem): PlayItem? =
+        inner.next(current)?.let { onThisPc(it) }
+
+    override suspend fun reload(current: PlayItem, seconds: Double): PlayItem? =
+        inner.reload(current, seconds)?.let { onThisPc(it) }
+
+    override suspend fun playlistItem(videoId: String): PlayItem? =
+        inner.playlistItem(videoId)?.let { onThisPc(it) }
+
+    /** The header stays, as the video's subtitles still come from its server. */
+    private suspend fun onThisPc(item: PlayItem): PlayItem {
+        val file = withContext(Dispatchers.IO) { fileOf(item) } ?: return item
+        return item.copy(url = file.absolutePath)
+    }
+
+    private fun fileOf(item: PlayItem): File? {
+        val downloads = app.downloads
+        // The archive's episode in the version that plays, wherever it would be streamed from
+        item.jrwi?.let { episode ->
+            val id = app.jrwiDownloads.idOf(episode, item.jrwiAudio)
+            id?.let(downloads::fileOf)?.let {
+                return it
+            }
+        }
+        // A TubeArchivist video, or else a file straight from the archive
+        return downloads.fileOf(item.id)
+            ?: item.url.toHttpUrlOrNull()?.let { downloads.fileOf("jrwi:$it") }
+    }
+}
+
+private fun serverSource(app: AppGraph, request: PlayerRequest): PlaybackSource {
     val linked = app.settings.isJrwiConfigured
     val resume = !request.fromStart && request.startSeconds == null
     return when (request) {

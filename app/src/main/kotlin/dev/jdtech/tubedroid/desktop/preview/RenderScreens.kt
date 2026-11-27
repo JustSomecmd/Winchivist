@@ -51,7 +51,10 @@ import dev.jdtech.jellyfin.tubearchivist.TaWatchPart
 import dev.jdtech.jellyfin.tubearchivist.TaWatchStats
 import dev.jdtech.tubedroid.desktop.AppGraph
 import dev.jdtech.tubedroid.desktop.AppSettings
+import dev.jdtech.tubedroid.desktop.Kept
+import dev.jdtech.tubedroid.desktop.KeptEpisode
 import dev.jdtech.tubedroid.desktop.LocalApp
+import dev.jdtech.tubedroid.desktop.LocalDownload
 import dev.jdtech.tubedroid.desktop.LocalWindowState
 import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.Section
@@ -124,6 +127,7 @@ fun main(args: Array<String>) {
     val graph = AppGraph(settings)
     installImageLoader(graph.api, graph.jrwi.api)
     checkJellyfinSignIn(graph, server.url)
+    showDownloads(graph)
     // A playlist part way through, for Continue watching
     SampleData.playlists[1].let { playlist ->
         graph.history.updatePlaylist(playlist.id, playlist.name, SampleData.videos[2].youtubeId)
@@ -182,6 +186,8 @@ fun main(args: Array<String>) {
         capture("stats")
         shell.select(Section.QUEUE)
         capture("queue")
+        shell.select(Section.ON_THIS_PC)
+        capture("on-this-pc")
         shell.select(Section.SETTINGS)
         capture("settings")
         for (group in SettingsGroup.entries.drop(1)) {
@@ -197,6 +203,8 @@ fun main(args: Array<String>) {
         capture("jrwi-home")
         shell.select(Section.JRWI_SHOWS)
         capture("jrwi-shows")
+        shell.select(Section.JRWI_ON_THIS_PC)
+        capture("jrwi-on-this-pc")
         shell.open(Route.JrwiShowPage(SampleArchive.shows[0].id))
         capture("jrwi-show")
         shell.open(Route.JrwiPost(SampleArchive.episodes[1].id))
@@ -692,6 +700,97 @@ private object SampleData {
  * fail the ordinary way: a library missing from the app stops it with an error instead, which fails
  * the build here before it can stop the app.
  */
+/**
+ * Puts made-up downloads in the record: some videos and episodes on this PC, and a few still on
+ * their way in each of the states a download can be in.
+ */
+private fun showDownloads(graph: AppGraph) {
+    fun video(index: Int, state: String = Kept.DONE): Kept {
+        val video = SampleData.videos[index]
+        val channel = video.channel?.name.orEmpty()
+        return Kept(
+            id = video.youtubeId,
+            service = Kept.TUBEARCHIVIST,
+            title = video.title,
+            group = channel,
+            groupId = video.channel?.id,
+            file = "TubeArchivist/$channel/${video.title} [${video.youtubeId}].mp4",
+            source = "/media/${video.youtubeId}.mp4",
+            size = video.mediaSize,
+            state = state,
+            added = 1_764_000_000_000L + index,
+            seconds = video.player?.duration,
+            picture = video.thumbUrl,
+            date = video.published,
+        )
+    }
+    fun episode(index: Int, audio: Boolean, state: String = Kept.DONE): Kept? {
+        val item = SampleArchive.episodes[index]
+        val address = (if (audio) item.audio?.url else item.video?.url) ?: return null
+        val id = graph.jrwiDownloads.idOf(item, audio) ?: return null
+        return Kept(
+            id = id,
+            service = Kept.JRWI,
+            audio = audio,
+            title = item.title,
+            group = "Riptide",
+            groupId = item.show,
+            file = "JRWI/Riptide/${item.title} [jrwi-${item.id}].${if (audio) "m4a" else "mp4"}",
+            source = address,
+            size = if (audio) item.audio?.size ?: 168_000_000L else item.video?.size,
+            state = state,
+            added = 1_764_000_100_000L + index,
+            seconds = item.duration,
+            picture = item.thumbnail,
+            date = item.date,
+            episode =
+                KeptEpisode(
+                    item = item.id,
+                    show = "Riptide",
+                    showId = item.show,
+                    season = item.season,
+                    episode = item.episode,
+                ),
+        )
+    }
+    fun coming(kept: Kept, state: LocalDownload.State, share: Float?): LocalDownload {
+        val size = kept.size ?: 0L
+        return LocalDownload(
+            id = kept.id,
+            title = kept.title,
+            file = File(graph.settings.downloadFolder, kept.file),
+            progress = share,
+            state = state,
+            error = "The server answered with 503".takeIf { state == LocalDownload.State.FAILED },
+            route = kept.route,
+            kept = kept,
+            have = ((share ?: 0f) * size).toLong(),
+        )
+    }
+    val whole =
+        listOf(0, 1, 2, 4, 5, 8, 9).map { video(it) } +
+            listOfNotNull(
+                episode(0, audio = true),
+                episode(1, audio = false),
+                episode(1, audio = true),
+                episode(3, audio = true),
+            )
+    val unfinished =
+        listOfNotNull(
+            coming(video(13, Kept.FAILED), LocalDownload.State.FAILED, 0.1f),
+            coming(video(12, Kept.PAUSED), LocalDownload.State.PAUSED, 0.64f),
+            coming(video(11, Kept.WAITING), LocalDownload.State.QUEUED, null),
+            episode(2, audio = true, state = Kept.WAITING)?.let {
+                coming(it, LocalDownload.State.QUEUED, null)
+            },
+            episode(4, audio = false, state = Kept.WAITING)?.let {
+                coming(it, LocalDownload.State.RUNNING, 0.27f)
+            },
+            coming(video(10, Kept.WAITING), LocalDownload.State.RUNNING, 0.42f),
+        )
+    graph.downloads.showForPreview(whole, unfinished)
+}
+
 /** The app as its window shows it: the window's own bar, and the pages under it. */
 @Composable
 private fun WindowWithBar(shell: Shell) {

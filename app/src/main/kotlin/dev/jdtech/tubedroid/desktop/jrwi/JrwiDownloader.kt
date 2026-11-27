@@ -3,6 +3,8 @@ package dev.jdtech.tubedroid.desktop.jrwi
 import dev.jdtech.jellyfin.jrwi.JrwiItem
 import dev.jdtech.tubedroid.desktop.AppGraph
 import dev.jdtech.tubedroid.desktop.Downloads
+import dev.jdtech.tubedroid.desktop.Kept
+import dev.jdtech.tubedroid.desktop.KeptEpisode
 import dev.jdtech.tubedroid.desktop.LocalDownload
 import dev.jdtech.tubedroid.desktop.Route
 import java.io.File
@@ -22,10 +24,10 @@ data class JrwiPageContents(val items: List<JrwiItem>) {
 }
 
 /**
- * Saves the archive's episodes to this computer: the audio from the archiver, an archived video
+ * Downloads the archive's episodes to this computer: the audio from the archiver, an archived video
  * from the archiver too, a video that's only on YouTube from TubeArchivist, and the post's own
  * files next to them when asked. They go to the downloads folder, under JRWI and the show's name,
- * and nothing is kept track of afterwards.
+ * and the app's record of downloads keeps track of them.
  */
 class JrwiDownloader(private val app: AppGraph) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -39,9 +41,22 @@ class JrwiDownloader(private val app: AppGraph) {
         return jrwiDownloadId(app, address)?.let { app.downloads.stateOf(it) }
     }
 
-    /** Stops an episode's download. */
+    /** What the record of downloads knows an episode's version by. */
+    fun idOf(item: JrwiItem, audio: Boolean): String? {
+        if (!audio && item.video?.isYoutube == true) return item.video?.youtubeId
+        val address = (if (audio) item.audio?.url else item.video?.url) ?: return null
+        return jrwiDownloadId(app, address)
+    }
+
+    /** Whether that version of the episode is whole on this PC. */
+    fun isKept(item: JrwiItem, audio: Boolean): Boolean =
+        idOf(item, audio)?.let { app.downloads.isKept(it) } == true
+
+    /**
+     * Stops an episode's download, or takes the episode off this PC, with what was saved with it.
+     */
     fun cancel(item: JrwiItem, audio: Boolean) {
-        downloadOf(item, audio)?.let { app.downloads.cancel(it.id) }
+        idOf(item, audio)?.let { app.downloads.cancel(it) }
     }
 
     /**
@@ -52,45 +67,73 @@ class JrwiDownloader(private val app: AppGraph) {
     fun download(item: JrwiItem, audio: Boolean, withFiles: Boolean, showName: String): File? {
         val folder = jrwiDownloadFolder(app, showName)
         val base = "${Downloads.safeName(item.title).take(110)} [jrwi-${item.id}]"
-        val route = Route.JrwiPost(item.id)
-        val started =
-            if (audio) {
-                val version = item.audio ?: return null
-                saveJrwiFile(
-                    app = app,
-                    name = "$base.${audioExtension(version.mime)}",
-                    address = version.url,
-                    folder = folder,
-                    title = item.title,
-                    route = route,
-                ) != null
-            } else {
-                val version = item.video ?: return null
-                val youtubeId = version.youtubeId
-                val address = version.url
+        val episode =
+            KeptEpisode(
+                item = item.id,
+                show = showName,
+                showId = item.show,
+                season = item.season,
+                episode = item.episode,
+            )
+        val id: String?
+        if (audio) {
+            val version = item.audio ?: return null
+            val file = File(folder, "$base.${audioExtension(version.mime)}")
+            id = keep(item, episode, version.url, file, audio = true)
+        } else {
+            val version = item.video ?: return null
+            val youtubeId = version.youtubeId
+            val address = version.url
+            id =
                 when {
                     version.isYoutube && youtubeId != null && app.api.isConfigured -> {
-                        app.downloads.startById(youtubeId)
-                        true
+                        app.downloads.startById(youtubeId, episode)
+                        youtubeId
                     }
                     address != null -> {
                         // Under the name the archiver filed it by, which Jellyfin knows it as
                         val filed = version.jellyfinPath?.substringAfterLast('/')
-                        saveJrwiFile(
-                            app = app,
-                            name = filed?.takeIf { it.isNotBlank() } ?: "$base.mp4",
-                            address = address,
-                            folder = folder,
-                            title = item.title,
-                            route = route,
-                        ) != null
+                        val name = filed?.takeIf { it.isNotBlank() } ?: "$base.mp4"
+                        val file = File(folder, Downloads.safeName(name))
+                        keep(item, episode, address, file, audio = false)
                     }
-                    else -> false
+                    else -> null
                 }
-            }
-        if (!started) return null
-        if (withFiles) saveFiles(item, File(folder, "$base files"))
+        }
+        if (id == null) return null
+        if (withFiles) saveFiles(item, File(folder, "$base files"), id)
         return folder
+    }
+
+    /** Puts one version of an episode in the queue of downloads. Returns what it's known by. */
+    private fun keep(
+        item: JrwiItem,
+        episode: KeptEpisode,
+        address: String,
+        file: File,
+        audio: Boolean,
+    ): String? {
+        val id = jrwiDownloadId(app, address) ?: return null
+        val path = Downloads.pathIn(File(app.settings.downloadFolder), file) ?: return null
+        app.downloads.startKept(
+            Kept(
+                id = id,
+                service = Kept.JRWI,
+                audio = audio,
+                title = item.title,
+                group = episode.show,
+                groupId = episode.showId,
+                file = path,
+                source = address,
+                size = if (audio) item.audio?.size else item.video?.size,
+                seconds =
+                    (if (audio) item.audio?.duration else item.video?.duration) ?: item.duration,
+                picture = item.thumbnail,
+                date = item.date,
+                episode = episode,
+            )
+        )
+        return id
     }
 
     /**
@@ -141,8 +184,11 @@ class JrwiDownloader(private val app: AppGraph) {
         }
     }
 
-    /** The files of all an item's posts, apart from the episode itself, into [folder]. */
-    private fun saveFiles(item: JrwiItem, folder: File) {
+    /**
+     * The files of all an item's posts, apart from the episode itself, into [folder]. They're noted
+     * with the download [keptWith], and go when it's taken off this PC.
+     */
+    private fun saveFiles(item: JrwiItem, folder: File, keptWith: String) {
         scope.launch {
             try {
                 app.jrwi.api
@@ -156,13 +202,14 @@ class JrwiDownloader(private val app: AppGraph) {
                     }
                     .forEach { file ->
                         saveJrwiFile(
-                            app = app,
-                            name = file.name.ifBlank { pictureSaveName(file.url.orEmpty()) },
-                            address = file.url.orEmpty(),
-                            folder = folder,
-                            title = "${file.name} · ${item.title}",
-                            route = Route.JrwiPost(item.id),
-                        )
+                                app = app,
+                                name = file.name.ifBlank { pictureSaveName(file.url.orEmpty()) },
+                                address = file.url.orEmpty(),
+                                folder = folder,
+                                title = "${file.name} · ${item.title}",
+                                route = Route.JrwiPost(item.id),
+                            )
+                            ?.let { saved -> app.downloads.noteFile(keptWith, saved) }
                     }
             } catch (e: CancellationException) {
                 throw e

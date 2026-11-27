@@ -11,8 +11,14 @@ sealed interface Route {
 
     data object Playlists : Route
 
-    /** What was saved to this computer in this session. */
+    /** The files that were only saved to this computer in this session, with no track kept. */
     data object Downloads : Route
+
+    /** TubeArchivist's videos that Winchivist downloaded to this computer. */
+    data object OnThisPc : Route
+
+    /** The JRWI archive's episodes that Winchivist downloaded to this computer. */
+    data object JrwiOnThisPc : Route
 
     /** Search across the servers that are set up, starting with TubeArchivist. */
     data object Search : Route
@@ -108,9 +114,11 @@ enum class Section(val root: Route, val label: String, val icon: String, val gro
     CHANNELS(Route.Channels, "Channels", "ic_users", RailGroup.TUBEARCHIVIST),
     PLAYLISTS(Route.Playlists, "Playlists", "ic_list_video", RailGroup.TUBEARCHIVIST),
     QUEUE(Route.Queue, "Downloads", "ic_list_plus", RailGroup.TUBEARCHIVIST),
+    ON_THIS_PC(Route.OnThisPc, "On this PC", "ic_download", RailGroup.TUBEARCHIVIST),
     STATS(Route.Stats, "Server stats", "ic_gauge", RailGroup.TUBEARCHIVIST),
     JRWI_HOME(Route.JrwiHome, "Home", "ic_home", RailGroup.JRWI),
     JRWI_SHOWS(Route.JrwiShows, "Shows", "ic_library", RailGroup.JRWI),
+    JRWI_ON_THIS_PC(Route.JrwiOnThisPc, "On this PC", "ic_download", RailGroup.JRWI),
     JRWI_ARCHIVER(Route.JrwiArchiver, "Archiver", "ic_server", RailGroup.JRWI),
     JRWI_STATS(Route.JrwiStats, "Archive stats", "ic_gauge", RailGroup.JRWI),
     JRWI_COMPUTE(Route.JrwiCompute, "Compute box", "ic_monitor", RailGroup.JRWI),

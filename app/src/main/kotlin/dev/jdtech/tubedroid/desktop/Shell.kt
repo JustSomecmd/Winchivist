@@ -82,6 +82,8 @@ import dev.jdtech.tubedroid.desktop.screens.ChannelScreen
 import dev.jdtech.tubedroid.desktop.screens.ChannelsScreen
 import dev.jdtech.tubedroid.desktop.screens.DownloadsScreen
 import dev.jdtech.tubedroid.desktop.screens.HomeScreen
+import dev.jdtech.tubedroid.desktop.screens.JrwiOnThisPcScreen
+import dev.jdtech.tubedroid.desktop.screens.OnThisPcScreen
 import dev.jdtech.tubedroid.desktop.screens.PlaylistScreen
 import dev.jdtech.tubedroid.desktop.screens.PlaylistsScreen
 import dev.jdtech.tubedroid.desktop.screens.QueueScreen
@@ -357,7 +359,9 @@ private fun availableSections(shell: Shell): List<Section> {
     val tubeArchivist = app.settings.isConfigured
     val jrwi = app.settings.isJrwiConfigured
     val jellyfin = app.jellyfin.isSignedIn
-    val downloads = app.downloads.items.isNotEmpty() || shell.section == Section.DOWNLOADS
+    // The files that were only saved; what's kept track of has its own pages
+    val downloads =
+        app.downloads.items.any { it.kept == null } || shell.section == Section.DOWNLOADS
     return Section.entries.filter { section ->
         when (section.group) {
             RailGroup.TUBEARCHIVIST -> tubeArchivist
@@ -608,6 +612,8 @@ private fun PageContent(route: Route) {
         Route.Channels -> ChannelsScreen()
         Route.Playlists -> PlaylistsScreen()
         Route.Downloads -> DownloadsScreen()
+        Route.OnThisPc -> OnThisPcScreen()
+        Route.JrwiOnThisPc -> JrwiOnThisPcScreen()
         Route.Search -> SearchScreen(start = null)
         Route.Stats -> StatsScreen()
         Route.Queue -> QueueScreen()

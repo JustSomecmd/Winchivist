@@ -197,7 +197,8 @@ fun JrwiPageState(loading: Boolean, error: String?, onRetry: () -> Unit) {
 
 /**
  * The label in the corner of an audio or video post's picture, as every list of the archive shows
- * it: a film when it has a video, headphones when it has audio, then its length.
+ * it: a film when it has a video, headphones when it has audio, then its length. A version that's
+ * on this PC has its mark in the accent, as on the phone.
  */
 @Composable
 fun JrwiVersionLabel(item: JrwiItem, modifier: Modifier = Modifier) {
@@ -205,6 +206,8 @@ fun JrwiVersionLabel(item: JrwiItem, modifier: Modifier = Modifier) {
     val video = item.video != null
     val audio = item.audio != null
     if (!video && !audio && length == null) return
+    val downloads = LocalApp.current.jrwiDownloads
+    val here = MaterialTheme.colorScheme.primary
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -219,7 +222,7 @@ fun JrwiVersionLabel(item: JrwiItem, modifier: Modifier = Modifier) {
             AppIcon(
                 name = "ic_film",
                 contentDescription = "Video",
-                tint = Color.White,
+                tint = if (downloads.isKept(item, audio = false)) here else Color.White,
                 modifier = Modifier.size(14.dp),
             )
         }
@@ -227,7 +230,7 @@ fun JrwiVersionLabel(item: JrwiItem, modifier: Modifier = Modifier) {
             AppIcon(
                 name = "ic_headphones",
                 contentDescription = "Audio",
-                tint = Color.White,
+                tint = if (downloads.isKept(item, audio = true)) here else Color.White,
                 modifier = Modifier.size(14.dp),
             )
         }

@@ -96,7 +96,10 @@ fun OverlayLabel(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** A video's thumbnail with its length, watched tick and how far it was watched. */
+/**
+ * A video's thumbnail with its length, watched tick and how far it was watched, and a mark at the
+ * top left when it's on this PC.
+ */
 @Composable
 fun VideoThumbnail(video: TaVideo, modifier: Modifier = Modifier) {
     Box(modifier = modifier.aspectRatio(16f / 9f).clip(CardShape)) { VideoThumbnailContent(video) }
@@ -123,6 +126,20 @@ fun BoxScope.VideoThumbnailContent(video: TaVideo) {
                 name = "ic_check",
                 contentDescription = "Watched",
                 tint = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.padding(4.dp).size(14.dp),
+            )
+        }
+    }
+    if (LocalApp.current.downloads.isKept(video.youtubeId)) {
+        Surface(
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.7f),
+            modifier = Modifier.align(Alignment.TopStart).padding(Spacings.small),
+        ) {
+            AppIcon(
+                name = "ic_download",
+                contentDescription = "On this PC",
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(4.dp).size(14.dp),
             )
         }

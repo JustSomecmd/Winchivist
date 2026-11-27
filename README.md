@@ -6,6 +6,9 @@ desktop app uses.
 
 - Browse your TubeArchivist channels, videos and playlists, and search them
 - Download videos and playlists on the server, and follow the download queue
+- Download TubeArchivist's videos and the JRWI archive's episodes to this PC: in a queue that pauses, goes on where
+  it stopped and survives a restart, as files under `TubeArchivist/<Channel>/` and `JRWI/<Show>/` in the downloads
+  folder. The players use the copy on the PC, and each service has an "On this PC" page
 - Watch with Jellyfin-style controls over the video: chapters, subtitle and audio tracks, speed, skip buttons for
   SponsorBlock segments and Jellyfin's intros and credits, and Jellyfin's preview pictures on the seek bar.
   They fade, with the mouse pointer, three seconds after the mouse last moved or one of the player's keys was used

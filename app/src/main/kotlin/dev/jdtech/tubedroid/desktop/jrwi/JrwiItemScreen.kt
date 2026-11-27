@@ -778,12 +778,50 @@ private fun JrwiItemDetails(model: JrwiItemModel, item: JrwiItem) {
                 onClick = { model.toggleWatched(navigator) },
             )
             when {
-                download?.active == true ->
+                download?.active == true -> {
+                    JrwiSquareButton(
+                        icon = "ic_pause",
+                        label = "Pause the download",
+                        on = true,
+                        onClick = { app.downloads.pause(download.id) },
+                    )
                     JrwiSquareButton(
                         icon = "ic_x",
                         label = "Cancel the download",
                         onClick = { app.jrwiDownloads.cancel(item, playsAudio) },
                     )
+                }
+                download?.kept != null && download.unfinished -> {
+                    JrwiSquareButton(
+                        icon = "ic_download",
+                        label = "Go on with the download",
+                        onClick = { app.downloads.resume(download.id) },
+                    )
+                    JrwiSquareButton(
+                        icon = "ic_x",
+                        label = "Cancel the download",
+                        onClick = { app.jrwiDownloads.cancel(item, playsAudio) },
+                    )
+                }
+                download?.state == LocalDownload.State.DONE && download.kept != null -> {
+                    JrwiSquareButton(
+                        icon = "ic_download",
+                        label = "On this PC: show in folder",
+                        on = true,
+                        onClick = {
+                            runCatching {
+                                download.file.parentFile?.let {
+                                    java.awt.Desktop.getDesktop().open(it)
+                                }
+                            }
+                        },
+                    )
+                    JrwiSquareButton(
+                        icon = "ic_trash",
+                        label = "Remove from this PC",
+                        onClick = { app.jrwiDownloads.cancel(item, playsAudio) },
+                    )
+                }
                 download?.state == LocalDownload.State.DONE ->
                     JrwiSquareButton(
                         icon = "ic_download",

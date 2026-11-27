@@ -332,6 +332,8 @@ fun VideoContent(model: VideoModel, video: TaVideo, onPlay: (fromStart: Boolean)
                         canDownload = video.mediaUrl != null,
                         onDownload = { app.downloads.start(video) },
                         onCancel = { app.downloads.cancel(video.youtubeId) },
+                        onPause = { app.downloads.pause(video.youtubeId) },
+                        onResume = { app.downloads.resume(video.youtubeId) },
                     )
                     DetailMoreButton(
                         actions =
@@ -405,24 +407,42 @@ fun VideoContent(model: VideoModel, video: TaVideo, onPlay: (fromStart: Boolean)
     }
 }
 
-/** Downloading the video to this PC, as a round button: start, cancel, or show the file. */
+/**
+ * Downloading the video to this PC, as round buttons: start, pause and go on, or show the file,
+ * each with one beside it that takes the video off this PC again.
+ */
 @Composable
 private fun DownloadButton(
     download: LocalDownload?,
     canDownload: Boolean,
     onDownload: () -> Unit,
     onCancel: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
 ) {
     when (download?.state) {
         LocalDownload.State.QUEUED,
-        LocalDownload.State.RUNNING ->
+        LocalDownload.State.RUNNING -> {
             DetailButton(
-                icon = "ic_x",
-                label = "Cancel the download",
-                onClick = onCancel,
+                icon = "ic_pause",
+                label = "Pause the download",
+                onClick = onPause,
                 on = true,
             )
-        LocalDownload.State.DONE ->
+            DetailButton(icon = "ic_x", label = "Cancel the download", onClick = onCancel)
+        }
+        LocalDownload.State.PAUSED,
+        LocalDownload.State.FAILED -> {
+            DetailButton(
+                icon = "ic_download",
+                label = "Go on with the download",
+                onClick = if (download.kept != null) onResume else onDownload,
+            )
+            if (download.kept != null) {
+                DetailButton(icon = "ic_x", label = "Cancel the download", onClick = onCancel)
+            }
+        }
+        LocalDownload.State.DONE -> {
             DetailButton(
                 icon = "ic_download",
                 label = "On this PC: show in folder",
@@ -431,6 +451,14 @@ private fun DownloadButton(
                 },
                 on = true,
             )
+            if (download.kept != null) {
+                DetailButton(
+                    icon = "ic_trash",
+                    label = "Remove from this PC",
+                    onClick = onCancel,
+                )
+            }
+        }
         else ->
             DetailButton(
                 icon = "ic_download",
@@ -462,6 +490,12 @@ fun DownloadProgress(download: LocalDownload) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            LocalDownload.State.PAUSED ->
+                Text(
+                    text = "The download is paused",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             LocalDownload.State.DONE ->
                 Text(
                     text = "Saved as ${download.file.path}",

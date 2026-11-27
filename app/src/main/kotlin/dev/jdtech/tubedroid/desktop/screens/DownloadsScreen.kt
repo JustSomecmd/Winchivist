@@ -173,7 +173,7 @@ fun DownloadsScreen() {
     val state = rememberPageModel("downloads") { LazyListState() }
     Column(modifier = Modifier.fillMaxSize()) {
         PageBar(title = "Saved to this PC", onBack = null) {
-            if (app.downloads.items.any { !it.active }) {
+            if (app.downloads.items.any { !it.active && it.kept == null }) {
                 TextButton(onClick = app.downloads::forgetFinished) { Text("Clear finished") }
             }
         }
@@ -198,12 +198,15 @@ fun QueueScreen() {
     }
 }
 
-/** What was saved to this computer in this session, and what's still on its way. */
+/**
+ * The files that were only saved to this computer in this session, and those still on their way.
+ * The videos and episodes that are kept track of are on the "On this PC" pages.
+ */
 @Composable
 private fun LocalDownloads(state: LazyListState) {
     val app = LocalApp.current
     val navigator = LocalNavigator.current
-    val items = app.downloads.items
+    val items = app.downloads.items.filter { it.kept == null }
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             state = state,
@@ -236,7 +239,8 @@ private fun LocalDownloads(state: LazyListState) {
             if (items.isEmpty()) {
                 item(key = "empty") {
                     Text(
-                        text = "Nothing downloaded yet. A page's download button saves to this PC.",
+                        text =
+                            "Nothing saved in this session. Videos and episodes are under On this PC.",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(vertical = Spacings.large),
                     )
@@ -295,6 +299,7 @@ private fun LocalDownloadRow(
                             )
                         }
                     }
+                    LocalDownload.State.PAUSED -> Detail("Paused")
                     LocalDownload.State.DONE -> Detail(download.file.path)
                     LocalDownload.State.FAILED -> Detail("Failed: ${download.error.orEmpty()}")
                     LocalDownload.State.CANCELLED -> Detail("Cancelled")
