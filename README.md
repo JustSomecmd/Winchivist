@@ -15,6 +15,7 @@ desktop app uses.
 - Watch with Jellyfin-style controls over the video: chapters, subtitle and audio tracks, speed, skip buttons for
   SponsorBlock segments and Jellyfin's intros and credits, and Jellyfin's preview pictures on the seek bar.
   They fade, with the mouse pointer, three seconds after the mouse last moved or one of the player's keys was used
+- The seek bar says what's under the mouse, and under the knob while it's dragged: the time and the chapter's name
 - Its own bar along the top of the window, in the app's colours, in place of Windows' white one. Settings can bring
   Windows' own back
 - A mini player: the video in a small box in a corner of the window while you use the pages, and whole again with a
