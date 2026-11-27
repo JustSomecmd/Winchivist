@@ -395,7 +395,8 @@ fun main(args: Array<String>) {
         osdSession.showForPreview(
             position = 312.0,
             duration = 790.0,
-            chapters = listOf(150.0, 612.0),
+            chapters = listOf(0.0, 150.0, 612.0),
+            names = listOf("What you need", "Mixing and kneading", "Into the oven"),
         )
         fun osdSceneOf(session: PlayerSession) =
             ImageComposeScene(width = 1360, height = 860, density = Density(1f)) {
@@ -440,6 +441,8 @@ fun main(args: Array<String>) {
         val osdScene = osdSceneOf(osdSession)
         // In their first second
         osdShot(osdScene, "player-osd", turns = 5)
+        // The mouse over the seek bar, in the second chapter: its time and the chapter's name
+        osdShot(osdScene, "player-osd-chapter", turns = 2, mouse = Offset(700f, 782f))
         // Four seconds on, with the mouse lying still on the bottom bar: faded, though it's paused
         val restingAt = Offset(300f, 824f)
         osdShot(osdScene, "player-osd-idle", turns = 20, mouse = restingAt)

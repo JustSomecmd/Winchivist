@@ -73,6 +73,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
@@ -592,6 +593,7 @@ private fun OsdBottomRows(
                 position = session.position,
                 duration = session.duration,
                 chapters = if (settings.chapterMarks) session.chapters else emptyList(),
+                chapterName = session::chapterNameAt,
                 onSeek = session::seekTo,
                 trickplay = session.item?.trickplay?.takeIf { settings.trickplay },
                 modifier = Modifier.weight(1f).padding(horizontal = Spacings.medium),
@@ -1096,8 +1098,9 @@ private fun TrackMenu(
 
 /**
  * The seek bar, thin as Jellyfin's: what's been played in the accent, a tick at each chapter, and
- * the time under the mouse above it, with Jellyfin's preview picture of that moment when it has
- * them. Clicking or dragging seeks.
+ * above it the time under the mouse, with the name of the chapter that moment is in and Jellyfin's
+ * preview picture of it when there are any. They show while the mouse is over the bar and while
+ * it's dragged. Clicking or dragging seeks.
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
@@ -1108,6 +1111,8 @@ internal fun SeekBar(
     onSeek: (Double) -> Unit,
     modifier: Modifier = Modifier,
     trickplay: Trickplay? = null,
+    /** The name of the chapter a moment is in, or null when it's in none with a name. */
+    chapterName: (seconds: Double) -> String? = { null },
     /** What's been played is drawn in this, or in the theme's accent when it isn't given. */
     accent: Color = MaterialTheme.colorScheme.primary,
 ) {
@@ -1188,30 +1193,49 @@ internal fun SeekBar(
         val pointed = dragging?.let { it * constraints.maxWidth } ?: hoverX
         if (pointed != null && length > 0) {
             val seconds = length * (pointed / constraints.maxWidth).coerceIn(0f, 1f)
-            val x = with(LocalDensity.current) { pointed.toDp() }
-            if (trickplay != null) {
-                // Centred over the mouse, above the time, and kept within the bar's ends
-                val gap = with(LocalDensity.current) { 34.dp.roundToPx() }
-                Layout(content = { TrickplayPicture(trickplay, seconds) }) { measurables, _ ->
-                    val picture = measurables.first().measure(Constraints())
-                    val left =
-                        (pointed - picture.width / 2f)
-                            .roundToInt()
-                            .coerceIn(0, (constraints.maxWidth - picture.width).coerceAtLeast(0))
-                    layout(0, 0) { picture.place(left, -picture.height - gap) }
+            val chapter = chapterName(seconds)
+            val barWidth = constraints.maxWidth
+            val gap = with(LocalDensity.current) { 6.dp.roundToPx() }
+            // Stacked up from the bar: the time, the chapter's name, the picture. Each is centred
+            // over the mouse and kept within the bar's ends
+            Layout(
+                content = {
+                    SeekNote(formatDuration(seconds), MaterialTheme.typography.labelMedium)
+                    if (chapter != null) SeekNote(chapter, MaterialTheme.typography.labelLarge)
+                    if (trickplay != null) TrickplayPicture(trickplay, seconds)
+                }
+            ) { measurables, _ ->
+                val notes = measurables.map { it.measure(Constraints()) }
+                layout(0, 0) {
+                    var bottom = -gap
+                    notes.forEach { note ->
+                        val left =
+                            (pointed - note.width / 2f)
+                                .roundToInt()
+                                .coerceIn(0, (barWidth - note.width).coerceAtLeast(0))
+                        note.place(left, bottom - note.height)
+                        bottom -= note.height + gap
+                    }
                 }
             }
-            Text(
-                text = formatDuration(seconds),
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White,
-                modifier =
-                    Modifier.offset(x = x - 22.dp, y = (-26).dp)
-                        .background(SHADE.copy(alpha = 0.85f), RoundedCornerShape(4.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-            )
         }
     }
+}
+
+/** A line over the seek bar about the moment pointed at: its time, or its chapter's name. */
+@Composable
+private fun SeekNote(text: String, style: TextStyle) {
+    Text(
+        text = text,
+        style = style,
+        color = Color.White,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier =
+            Modifier.widthIn(max = 280.dp)
+                .background(SHADE.copy(alpha = 0.9f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+    )
 }
 
 /**

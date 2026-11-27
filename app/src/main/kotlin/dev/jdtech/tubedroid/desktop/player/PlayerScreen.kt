@@ -165,9 +165,23 @@ internal class PlayerSession(
     var chapters by mutableStateOf<List<Double>>(emptyList())
         private set
 
-    /** The chapters' names, one for each of [chapters]. */
+    /** The chapters' names, one for each of [chapters]; one without a name is numbered. */
     var chapterTitles by mutableStateOf<List<String>>(emptyList())
         private set
+
+    /** The names the chapters have themselves, one for each of [chapters], null for none. */
+    private var chapterNames by mutableStateOf<List<String?>>(emptyList())
+
+    /**
+     * The name of the chapter that [seconds] is in, for the note over the seek bar: the last
+     * chapter that starts at or before it. Null with fewer than two chapters, and for a chapter
+     * without a name.
+     */
+    fun chapterNameAt(seconds: Double): String? {
+        val starts = chapters
+        if (starts.size < 2) return null
+        return chapterNames.getOrNull(starts.indexOfLast { it <= seconds })
+    }
 
     /** Whether mpv's playback info shows over the video. */
     var statsShown by mutableStateOf(false)
@@ -331,10 +345,11 @@ internal class PlayerSession(
             (0 until chapterCount).mapNotNull { index ->
                 val time = player.getDouble("chapter-list/$index/time") ?: return@mapNotNull null
                 val title = player.get("chapter-list/$index/title")?.takeIf { it.isNotBlank() }
-                time to (title ?: "Chapter ${index + 1}")
+                Triple(time, title, title ?: "Chapter ${index + 1}")
             }
         chapters = read.map { it.first }
-        chapterTitles = read.map { it.second }
+        chapterNames = read.map { it.second }
+        chapterTitles = read.map { it.third }
     }
 
     /** A language's name in English, from a code such as en or eng. */
@@ -342,10 +357,16 @@ internal class PlayerSession(
         Locale.forLanguageTag(code).getDisplayLanguage(Locale.ENGLISH).ifBlank { code }
 
     /** Shows the controls as at a point of the video, for the page renders without mpv. */
-    internal fun showForPreview(position: Double, duration: Double, chapters: List<Double>) {
+    internal fun showForPreview(
+        position: Double,
+        duration: Double,
+        chapters: List<Double>,
+        names: List<String?> = emptyList(),
+    ) {
         this.position = position
         this.duration = duration
         this.chapters = chapters
+        chapterNames = names
         loading = false
         paused = true
     }
@@ -610,6 +631,7 @@ internal class PlayerSession(
         upNextCancelled = false
         chapters = emptyList()
         chapterTitles = emptyList()
+        chapterNames = emptyList()
         subtitleTracks = emptyList()
         audioTracks = emptyList()
         if (item.transcriptPost == null) transcriptOpen = false
