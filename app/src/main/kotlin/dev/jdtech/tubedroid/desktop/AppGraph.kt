@@ -14,7 +14,8 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
  * What the pages share: the settings, TubeArchivist, Jellyfin, the JRWI archive, the downloads to
- * this computer, the audio player, the compute box and the check for a newer Winchivist.
+ * this computer and what's kept with them for when a server is away, the audio player, the compute
+ * box and the check for a newer Winchivist.
  */
 class AppGraph(val settings: AppSettings) {
     val api = TaApi(settings)
@@ -28,11 +29,19 @@ class AppGraph(val settings: AppSettings) {
                 url.toString() to jrwi.api.authHeader.takeIf { own }
             }
         }
+    val pages = KeptPages(settings, downloads, api, jrwi.api) { jrwi.takeHeld(it) }
     val updates = Updates()
     val history = WatchHistory(settings, store = { jellyfin.playlistSessionStore })
     val jrwiDownloads = JrwiDownloader(this)
     val audio = AudioPlayer(this)
     val compute = ComputeBox(this)
+
+    init {
+        jrwi.kept = pages
+        // A download brings its page along, and takes it with it when it goes
+        downloads.whenAsked = pages::keepLater
+        downloads.whenGone = pages::sweepLater
+    }
 }
 
 val LocalApp = staticCompositionLocalOf<AppGraph> { error("No app") }

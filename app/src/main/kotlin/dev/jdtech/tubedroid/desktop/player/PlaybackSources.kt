@@ -6,10 +6,12 @@ import dev.jdtech.jellyfin.tubearchivist.TaChannel
 import dev.jdtech.jellyfin.tubearchivist.TaVideo
 import dev.jdtech.jellyfin.tubearchivist.loadPlaylist
 import dev.jdtech.tubedroid.desktop.AppSettings
+import dev.jdtech.tubedroid.desktop.KeptPages
 import dev.jdtech.tubedroid.desktop.Route
 import dev.jdtech.tubedroid.desktop.WatchHistory
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinClient
 import dev.jdtech.tubedroid.desktop.jellyfin.Languages
+import java.io.IOException
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.cancellation.CancellationException
@@ -201,6 +203,8 @@ internal class TaPlaybackSource(
     private val request: PlayerRequest.Ta,
     /** Told when a video plays here, so every device knows what was played last. */
     private val jellyfin: JellyfinClient? = null,
+    /** What's kept on this PC, which stands in while TubeArchivist can't be reached. */
+    private val pages: KeptPages? = null,
 ) : PlaybackSource {
     private var playlist: List<TaVideo> = emptyList()
     private var name = ""
@@ -228,13 +232,16 @@ internal class TaPlaybackSource(
 
     override suspend fun playlistItem(videoId: String): PlayItem? {
         if (playlist.none { it.youtubeId == videoId }) return null
-        return api.getVideo(videoId).toPlayItem(fromStart = false)
+        return video(videoId).toPlayItem(fromStart = false)
     }
+
+    /** The whole video, or as it's kept on this PC while TubeArchivist can't be reached. */
+    private suspend fun video(id: String): TaVideo = pages?.video(id) ?: api.getVideo(id)
 
     override var loop = false
 
     override suspend fun first(): PlayItem {
-        val video = api.getVideo(request.videoId)
+        val video = video(request.videoId)
         request.playlistId?.let { id ->
             runCatching { api.loadPlaylist(id) }
                 .getOrNull()
@@ -290,12 +297,22 @@ internal class TaPlaybackSource(
         // Starting over plays each video from its start again
         val startingOver = playlist.lastOrNull()?.youtubeId == current.id
         // The playlist's entries are short; the player needs the whole video
-        return api.getVideo(next.youtubeId).toPlayItem(fromStart = startingOver)
+        return video(next.youtubeId).toPlayItem(fromStart = startingOver)
     }
 
     override suspend fun progress(item: PlayItem, report: PlaybackReport) {
-        api.postProgress(item.id, report.seconds)
+        try {
+            api.postProgress(item.id, report.seconds)
+        } catch (e: IOException) {
+            // The place waits on this PC until TubeArchivist can be told
+            pages?.takeIf { it.unreachable(e) }?.holdPlace(item.id, report.seconds)
+            throw e
+        }
         told[item.id] = report.seconds
+        val pages = pages ?: return
+        // The page kept on this PC follows when the player stops, rather than every few seconds
+        pages.placeTaken(item.id, seconds = report.seconds.takeIf { report.paused })
+        if (pages.holdsForTubeArchivist) pages.sendHeld()
     }
 
     /**
@@ -320,7 +337,14 @@ internal class TaPlaybackSource(
     }
 
     override suspend fun ended(item: PlayItem) {
-        api.setWatched(item.id, true)
+        try {
+            api.setWatched(item.id, true)
+            pages?.placeTaken(item.id, seconds = 0.0, watched = true)
+        } catch (e: IOException) {
+            // That it's watched waits on this PC until TubeArchivist can be told
+            val kept = pages?.takeIf { it.unreachable(e) } ?: throw e
+            kept.holdWatched(item.id, watched = true)
+        }
         // Jellyfin's copy is watched too; a playlist carries on whether or not Jellyfin answers
         try {
             jellyfinEpisode(item)?.let { jellyfin?.setPlayed(it, true) }

@@ -85,6 +85,7 @@ import dev.jdtech.tubedroid.desktop.ui.AppIcon
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.Tooltip
 import dev.jdtech.tubedroid.desktop.ui.formatDuration
+import dev.jdtech.tubedroid.desktop.ui.pictureFrom
 import java.awt.Point
 import java.awt.Toolkit
 import java.awt.image.BufferedImage
@@ -740,7 +741,7 @@ internal fun OsdExtras(session: PlayerSession, modifier: Modifier = Modifier) {
                 ) {
                     session.upNextPicture?.let { picture ->
                         AsyncImage(
-                            model = picture,
+                            model = pictureFrom(picture),
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier =

@@ -68,6 +68,7 @@ import dev.jdtech.tubedroid.desktop.ui.RoundIconButton
 import dev.jdtech.tubedroid.desktop.ui.Spacings
 import dev.jdtech.tubedroid.desktop.ui.Tooltip
 import dev.jdtech.tubedroid.desktop.ui.formatDuration
+import dev.jdtech.tubedroid.desktop.ui.pictureFrom
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlinx.coroutines.delay
@@ -765,7 +766,7 @@ private fun AudioPicture(
     ) {
         if (picture != null) {
             AsyncImage(
-                model = picture,
+                model = pictureFrom(picture),
                 contentDescription = null,
                 contentScale = contentScale,
                 modifier = Modifier.fillMaxSize(),

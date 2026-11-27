@@ -118,6 +118,10 @@ data class Kept(
     val episode: KeptEpisode? = null,
     /** The post's files saved with it, from the downloads folder. */
     val files: List<String> = emptyList(),
+    /** What's kept for showing and playing it without its server, by file name. See [KeptPages]. */
+    val pages: List<String> = emptyList(),
+    /** Whether [pages] is all there is to keep for it. */
+    val paged: Boolean = false,
 ) {
     val whole: Boolean
         get() = state == DONE
@@ -199,6 +203,12 @@ class Downloads(
 
     /** The downloads folder the record was read from. */
     private var root = File(settings.downloadFolder)
+
+    /** Told the ID of a download that was just asked for, which then wants its page kept. */
+    var whenAsked: (String) -> Unit = {}
+
+    /** Told when downloads left the record, as what was kept for them may go too. */
+    var whenGone: () -> Unit = {}
     private val saves = Channel<Unit>(Channel.CONFLATED)
 
     init {
@@ -242,6 +252,18 @@ class Downloads(
 
     /** The record's line for [id], whatever state it's in. */
     fun keptOf(id: String): Kept? = record[id]
+
+    /** Every line of the record. */
+    fun all(): List<Kept> = record.values.toList()
+
+    /** Notes what's kept for showing [id] without its server, and whether that's all of it. */
+    fun notePages(id: String, pages: List<String>, whole: Boolean) {
+        val entry = record[id] ?: return
+        val all = (entry.pages + pages).distinct()
+        if (all == entry.pages && (entry.paged || !whole)) return
+        record[id] = entry.copy(pages = all, paged = entry.paged || whole)
+        save()
+    }
 
     /** What's whole on this PC of what [service]'s list has. */
     fun onThisPc(service: String): List<Kept> =
@@ -335,12 +357,15 @@ class Downloads(
                 validator = before?.validator.takeIf { before?.file == kept.file },
                 files =
                     (before?.files.orEmpty() + waitingFiles.remove(kept.id).orEmpty()).distinct(),
+                pages = before?.pages.orEmpty(),
+                paged = before?.paged == true,
             )
         record[entry.id] = entry
         save()
         items.removeAll { it.id == entry.id }
         update(shown(entry))
         launchJob(entry.id)
+        whenAsked(entry.id)
     }
 
     /**
@@ -432,6 +457,7 @@ class Downloads(
                     }
                 }
             }
+            whenGone()
         }
     }
 
@@ -732,6 +758,7 @@ class Downloads(
         if (gone.isEmpty() || folder != root) return
         gone.forEach { record.remove(it) }
         save()
+        whenGone()
     }
 
     /**
@@ -749,11 +776,7 @@ class Downloads(
 
     private fun write(folder: File, text: String) {
         try {
-            val home = File(folder, RECORD_FOLDER)
-            if (!home.isDirectory) {
-                if (!home.mkdirs()) return
-                runCatching { Files.setAttribute(home.toPath(), "dos:hidden", true) }
-            }
+            val home = ownFolder(folder) ?: return
             val fresh = File(home, "$RECORD_FILE.new")
             fresh.writeText(text)
             Files.move(
@@ -779,6 +802,19 @@ class Downloads(
         private const val RECORD_FILE = "downloads.json"
         private const val PART_OF_IT = 206
         private const val RANGE_NOT_THERE = 416
+
+        /**
+         * The hidden folder in the downloads [folder] that Winchivist keeps its own files in, made
+         * when it isn't there. Null when it can't be made, as on a drive that's away.
+         */
+        fun ownFolder(folder: File): File? {
+            val home = File(folder, RECORD_FOLDER)
+            if (!home.isDirectory) {
+                if (!home.mkdirs()) return null
+                runCatching { Files.setAttribute(home.toPath(), "dos:hidden", true) }
+            }
+            return home
+        }
 
         /** A file name without the characters Windows doesn't allow. */
         fun safeName(title: String): String =

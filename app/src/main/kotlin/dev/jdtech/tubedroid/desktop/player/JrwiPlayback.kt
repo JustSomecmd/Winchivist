@@ -33,8 +33,11 @@ internal class JrwiPlaybackSource(
     // The episode after the one playing, looked up once: its ID, then what follows it, if anything
     private var following: Pair<Long, JrwiItem?>? = null
 
+    // The archive couldn't be reached for the episode, which then plays as it's kept on this PC
+    private var away = false
+
     override suspend fun first(): PlayItem {
-        val item = repository.api.getItem(request.postId)
+        val item = repository.item(request.postId) { away = true }
         return play(item, fromStart = request.fromStart, startAt = request.startSeconds)
     }
 
@@ -48,11 +51,13 @@ internal class JrwiPlaybackSource(
             when {
                 startAt != null -> startAt.takeIf { it > 1 }
                 fromStart -> null
-                else ->
-                    repository
-                        .progress(item, audio)
-                        ?.takeIf { !it.finished && it.position > 5 }
-                        ?.position
+                else -> {
+                    // Without the archive, from where this PC last knew it to be
+                    val saved =
+                        if (away) repository.lastKnown(item, audio)
+                        else repository.progressOrKnown(item, audio)
+                    saved?.takeIf { !it.finished && it.position > 5 }?.position
+                }
             }
         val postId = (if (audio) item.audio?.postId else item.video?.postId) ?: item.id
         val id = "jrwi:${item.id}:${if (audio) "audio" else "video"}"
@@ -80,7 +85,7 @@ internal class JrwiPlaybackSource(
         if (!request.audio) return null
         val item = items[current.id] ?: return null
         following?.let { (id, next) -> if (id == item.id) return next }
-        val next = repository.nextInShow(item)?.takeIf { it.audio != null && !it.locked }
+        val next = repository.nextToHear(item)?.takeIf { it.audio != null && !it.locked }
         following = item.id to next
         return next
     }
@@ -223,7 +228,7 @@ internal class JrwiLinkedSource(
                 route = Route.JrwiPost(item.video?.postId ?: item.id),
             )
         if (!resume) return linked
-        val saved = repository.progress(item, audio = false) ?: return linked
+        val saved = repository.progressOrKnown(item, audio = false) ?: return linked
         return if (!saved.finished && saved.position > 5) {
             linked.copy(resumeSeconds = saved.position)
         } else {
@@ -278,8 +283,8 @@ internal fun playbackSource(app: AppGraph, request: PlayerRequest): PlaybackSour
 
 /**
  * Plays the copy on this PC of what [inner] would stream, when Winchivist downloaded it and it's
- * still there. Everything else stays [inner]'s: what plays next, where the place is saved, the
- * subtitles and the segments to skip.
+ * still there, with the subtitle files that were kept with it. Everything else stays [inner]'s:
+ * what plays next, where the place is saved and the segments to skip.
  */
 private class FromThisPc(private val inner: PlaybackSource, private val app: AppGraph) :
     PlaybackSource by inner {
@@ -294,10 +299,15 @@ private class FromThisPc(private val inner: PlaybackSource, private val app: App
     override suspend fun playlistItem(videoId: String): PlayItem? =
         inner.playlistItem(videoId)?.let { onThisPc(it) }
 
-    /** The header stays, as the video's subtitles still come from its server. */
+    /** The header stays, for the subtitles that still come from the server. */
     private suspend fun onThisPc(item: PlayItem): PlayItem {
         val file = withContext(Dispatchers.IO) { fileOf(item) } ?: return item
-        return item.copy(url = file.absolutePath)
+        val subtitles =
+            item.subtitles.map { subtitle ->
+                app.pages.local(subtitle.url)?.let { subtitle.copy(url = it.absolutePath) }
+                    ?: subtitle
+            }
+        return item.copy(url = file.absolutePath, subtitles = subtitles)
     }
 
     private fun fileOf(item: PlayItem): File? {
@@ -320,7 +330,15 @@ private fun serverSource(app: AppGraph, request: PlayerRequest): PlaybackSource 
     val resume = !request.fromStart && request.startSeconds == null
     return when (request) {
         is PlayerRequest.Ta -> {
-            val plain = TaPlaybackSource(app.api, app.settings, app.history, request, app.jellyfin)
+            val plain =
+                TaPlaybackSource(
+                    app.api,
+                    app.settings,
+                    app.history,
+                    request,
+                    app.jellyfin,
+                    app.pages,
+                )
             if (linked) {
                 JrwiLinkedSource(plain, app.jrwi, resume) { play -> app.jrwi.matchYoutube(play.id) }
             } else {

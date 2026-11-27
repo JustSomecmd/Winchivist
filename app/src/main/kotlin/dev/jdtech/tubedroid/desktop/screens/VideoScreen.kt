@@ -48,6 +48,7 @@ import dev.jdtech.jellyfin.tubearchivist.TaApi
 import dev.jdtech.jellyfin.tubearchivist.TaComment
 import dev.jdtech.jellyfin.tubearchivist.TaPlaylist
 import dev.jdtech.jellyfin.tubearchivist.TaVideo
+import dev.jdtech.tubedroid.desktop.KeptPages
 import dev.jdtech.tubedroid.desktop.LocalApp
 import dev.jdtech.tubedroid.desktop.LocalCanGoBack
 import dev.jdtech.tubedroid.desktop.LocalDownload
@@ -64,6 +65,7 @@ import dev.jdtech.tubedroid.desktop.ui.DetailLine
 import dev.jdtech.tubedroid.desktop.ui.DetailMoreButton
 import dev.jdtech.tubedroid.desktop.ui.InfoRow
 import dev.jdtech.tubedroid.desktop.ui.ItemAction
+import dev.jdtech.tubedroid.desktop.ui.KeptNotice
 import dev.jdtech.tubedroid.desktop.ui.ManageButton
 import dev.jdtech.tubedroid.desktop.ui.PageBar
 import dev.jdtech.tubedroid.desktop.ui.PagePadding
@@ -85,12 +87,22 @@ import dev.jdtech.tubedroid.desktop.ui.formatSize
 import dev.jdtech.tubedroid.desktop.ui.fullDate
 import dev.jdtech.tubedroid.desktop.ui.openInBrowser
 import dev.jdtech.tubedroid.desktop.ui.rememberLinkedText
+import java.io.IOException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-class VideoModel(private val api: TaApi, private val scope: CoroutineScope, val videoId: String) {
+class VideoModel(
+    private val api: TaApi,
+    private val pages: KeptPages,
+    private val scope: CoroutineScope,
+    val videoId: String,
+) {
     var video by mutableStateOf<TaVideo?>(null)
+        private set
+
+    /** TubeArchivist can't be reached, and the page is as it was kept with the download. */
+    var fromThisPc by mutableStateOf(false)
         private set
 
     var comments by mutableStateOf<List<TaComment>?>(null)
@@ -127,7 +139,9 @@ class VideoModel(private val api: TaApi, private val scope: CoroutineScope, val 
         error = null
         scope.launch {
             try {
-                video = api.getVideo(videoId)
+                var kept = false
+                video = pages.video(videoId) { kept = true }
+                fromThisPc = kept
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -136,7 +150,7 @@ class VideoModel(private val api: TaApi, private val scope: CoroutineScope, val 
                 loading = false
             }
         }
-        scope.launch { comments = quietly { api.getComments(videoId) } ?: emptyList() }
+        scope.launch { comments = quietly { pages.comments(videoId) } ?: emptyList() }
         scope.launch { similar = quietly { api.getSimilar(videoId) }.orEmpty() }
         scope.launch { metricSizes = api.usesMetricSizes() }
     }
@@ -144,8 +158,17 @@ class VideoModel(private val api: TaApi, private val scope: CoroutineScope, val 
     fun setWatched(watched: Boolean, onMessage: (String) -> Unit) {
         scope.launch {
             try {
-                api.setWatched(videoId, watched)
-                video = api.getVideo(videoId)
+                try {
+                    api.setWatched(videoId, watched)
+                    pages.placeTaken(videoId, if (watched) 0.0 else null, watched)
+                } catch (e: IOException) {
+                    // On a page from this PC, it waits here until TubeArchivist can be told
+                    if (!fromThisPc || !pages.unreachable(e)) throw e
+                    pages.holdWatched(videoId, watched)
+                }
+                var kept = false
+                video = pages.video(videoId) { kept = true }
+                fromThisPc = kept
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -220,7 +243,8 @@ class VideoModel(private val api: TaApi, private val scope: CoroutineScope, val 
 fun VideoScreen(videoId: String, playlistId: String?) {
     val app = LocalApp.current
     val navigator = LocalNavigator.current
-    val model = rememberPageModel("video") { scope -> VideoModel(app.api, scope, videoId) }
+    val model =
+        rememberPageModel("video") { scope -> VideoModel(app.api, app.pages, scope, videoId) }
     val canGoBack = LocalCanGoBack.current
 
     ServerSideTheme(onServer = model.onServer) {
@@ -233,6 +257,12 @@ fun VideoScreen(videoId: String, playlistId: String?) {
                         onClick = { model.onServer = !model.onServer },
                     )
                     OpenInWebButton("/video/$videoId/")
+                }
+                if (model.fromThisPc) {
+                    KeptNotice(
+                        "TubeArchivist can't be reached. This is the video as it was kept with " +
+                            "its download."
+                    )
                 }
                 val video = model.video
                 when {

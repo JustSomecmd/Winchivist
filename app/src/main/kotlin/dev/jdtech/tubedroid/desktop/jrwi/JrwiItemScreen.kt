@@ -62,6 +62,7 @@ import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 import dev.jdtech.tubedroid.desktop.rememberPageModel
 import dev.jdtech.tubedroid.desktop.screens.DownloadProgress
 import dev.jdtech.tubedroid.desktop.ui.AppIcon
+import dev.jdtech.tubedroid.desktop.ui.KeptNotice
 import dev.jdtech.tubedroid.desktop.ui.ListScrollbar
 import dev.jdtech.tubedroid.desktop.ui.PagePadding
 import dev.jdtech.tubedroid.desktop.ui.RoundIconButton
@@ -85,7 +86,8 @@ class JrwiPostContent(
     private val postId: Long?,
     private val item: JrwiItem,
 ) {
-    private val api = app.jrwi.api
+    // Each from the archive, or as it was kept with a download while the archive can't be reached
+    private val pages = app.pages
 
     var post by mutableStateOf(if (postId == null) item else null)
         private set
@@ -98,15 +100,15 @@ class JrwiPostContent(
 
     val comments =
         JrwiPagedList<JrwiComment>(scope, key = { it.id }) { page ->
-            if (postId == null) api.getComments(item.id, page)
-            else api.getPostComments(postId, page)
+            if (postId == null) pages.itemComments(item.id, page)
+            else pages.postComments(postId, page)
         }
 
     init {
         comments.loadMore()
         scope.launch {
             try {
-                if (postId != null) post = api.getPost(postId)
+                if (postId != null) post = pages.post(postId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -115,7 +117,7 @@ class JrwiPostContent(
         }
         scope.launch {
             try {
-                files = if (postId == null) api.getItemFiles(item.id) else api.getPostFiles(postId)
+                files = if (postId == null) pages.itemFiles(item.id) else pages.postFiles(postId)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -133,9 +135,12 @@ class JrwiItemModel(
     private val scope: CoroutineScope,
 ) {
     private val repository = app.jrwi
-    private val api = repository.api
 
     var item by mutableStateOf<JrwiItem?>(null)
+        private set
+
+    /** The archive can't be reached, and the post is as it was kept with its download. */
+    var fromThisPc by mutableStateOf(false)
         private set
 
     var error by mutableStateOf<String?>(null)
@@ -178,12 +183,20 @@ class JrwiItemModel(
         error = null
         scope.launch {
             try {
-                val loaded = api.getItem(postId)
+                var kept = false
+                val loaded = repository.item(postId) { kept = true }
+                fromThisPc = kept
                 if (item == null) {
                     // Opened on the version whose post this is; an item with only audio plays that
                     playsAudio =
                         loaded.audio != null &&
                             (loaded.video == null || loaded.audio?.postId == postId)
+                    if (kept) {
+                        // Without the archive, on the version that's on this PC when only one is
+                        val audioHere = app.jrwiDownloads.isKept(loaded, audio = true)
+                        val videoHere = app.jrwiDownloads.isKept(loaded, audio = false)
+                        if (audioHere != videoHere) playsAudio = audioHere
+                    }
                 }
                 item = loaded
                 finished = repository.finished(loaded)
@@ -213,8 +226,13 @@ class JrwiItemModel(
     }
 
     private suspend fun loadProgress(item: JrwiItem) {
-        val video = repository.progress(item, audio = false)
-        val audio = repository.progress(item, audio = true)
+        // Without the archive, where this PC last knew each version to be
+        val video =
+            if (fromThisPc) repository.lastKnown(item, audio = false)
+            else repository.progressOrKnown(item, audio = false)
+        val audio =
+            if (fromThisPc) repository.lastKnown(item, audio = true)
+            else repository.progressOrKnown(item, audio = true)
         video?.let { videoPosition = if (it.finished) 0.0 else it.position }
         audio?.let { audioPosition = if (it.finished) 0.0 else it.position }
         (video ?: audio)?.let { finished = it.finished }
@@ -357,6 +375,12 @@ fun JrwiItemScreen(postId: Long) {
                 if (item == null || content == null) {
                     JrwiPageState(loading = true, error = model.error, onRetry = model::load)
                     return@Column
+                }
+                if (model.fromThisPc) {
+                    KeptNotice(
+                        "The archive can't be reached. This is the post as it was kept with its " +
+                            "download."
+                    )
                 }
                 Box(modifier = Modifier.fillMaxSize()) {
                     JrwiItemList(model = model, item = item, content = content)

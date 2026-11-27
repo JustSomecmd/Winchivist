@@ -4,6 +4,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.VerticalScrollbar
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -70,11 +71,44 @@ fun TaImage(
 ) {
     val api = LocalApp.current.api
     AsyncImage(
-        model = api.mediaUrl(path),
+        model = pictureFrom(api.mediaUrl(path)),
         contentDescription = null,
         contentScale = contentScale,
         modifier = modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest),
     )
+}
+
+/**
+ * What the picture at [url] is loaded from: the copy that was kept with a download when there's
+ * one, which needs no server, and otherwise the address itself.
+ */
+@Composable
+fun pictureFrom(url: String?): Any? = url?.let { LocalApp.current.pages.local(it) ?: it }
+
+/** A line across a page that's shown as it's kept on this PC, as its server can't be reached. */
+@Composable
+fun KeptNotice(text: String, modifier: Modifier = Modifier) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier =
+            modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .padding(horizontal = Spacings.medium, vertical = 8.dp),
+    ) {
+        AppIcon(
+            name = "ic_download",
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(16.dp),
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 @Composable

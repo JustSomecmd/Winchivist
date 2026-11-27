@@ -125,6 +125,7 @@ fun main(args: Array<String>) {
             hearAskAfter = null
         }
     val graph = AppGraph(settings)
+    graph.pages.showForPreview()
     installImageLoader(graph.api, graph.jrwi.api)
     checkJellyfinSignIn(graph, server.url)
     showDownloads(graph)
@@ -134,8 +135,9 @@ fun main(args: Array<String>) {
     }
 
     runBlocking(Dispatchers.Main) {
-        // The downloader, tried for real before anything is drawn
+        // The downloader and the app without its servers, tried for real before anything is drawn
         checkDownloads()
+        checkOfflineUse()
         val shell = Shell(graph.audio)
         val scene =
             ImageComposeScene(width = 1360, height = 860, density = Density(1f)) {
@@ -190,6 +192,12 @@ fun main(args: Array<String>) {
         capture("queue")
         shell.select(Section.ON_THIS_PC)
         capture("on-this-pc")
+        // A video's page as it's shown without TubeArchivist, from what's kept with its download
+        graph.pages.showForPreview(asKept = true)
+        shell.open(Route.Video(SampleData.videos[1].youtubeId))
+        capture("video-from-this-pc")
+        shell.back()
+        graph.pages.showForPreview()
         shell.select(Section.SETTINGS)
         capture("settings")
         for (group in SettingsGroup.entries.drop(1)) {
@@ -207,6 +215,11 @@ fun main(args: Array<String>) {
         capture("jrwi-shows")
         shell.select(Section.JRWI_ON_THIS_PC)
         capture("jrwi-on-this-pc")
+        graph.pages.showForPreview(asKept = true)
+        shell.open(Route.JrwiPost(SampleArchive.episodes[0].id))
+        capture("jrwi-item-from-this-pc")
+        shell.back()
+        graph.pages.showForPreview()
         shell.open(Route.JrwiShowPage(SampleArchive.shows[0].id))
         capture("jrwi-show")
         shell.open(Route.JrwiPost(SampleArchive.episodes[1].id))

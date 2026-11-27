@@ -61,6 +61,7 @@ import dev.jdtech.tubedroid.desktop.ui.Tooltip
 import dev.jdtech.tubedroid.desktop.ui.formatDuration
 import dev.jdtech.tubedroid.desktop.ui.formatSize
 import dev.jdtech.tubedroid.desktop.ui.fullDate
+import dev.jdtech.tubedroid.desktop.ui.pictureFrom
 import java.io.IOException
 import java.time.LocalDate
 import java.time.OffsetDateTime
@@ -83,7 +84,7 @@ fun JrwiImage(
 ) {
     val api = LocalApp.current.jrwi.api
     AsyncImage(
-        model = api.fileUrl(path),
+        model = pictureFrom(api.fileUrl(path)),
         contentDescription = null,
         contentScale = contentScale,
         modifier = modifier.background(background),
@@ -852,7 +853,7 @@ private fun JrwiBadgeLabel(badge: JrwiBadge, modifier: Modifier = Modifier) {
 private fun JrwiBadgeImage(path: String, description: String?, modifier: Modifier) {
     val api = LocalApp.current.jrwi.api
     AsyncImage(
-        model = api.fileUrl(path),
+        model = pictureFrom(api.fileUrl(path)),
         contentDescription = description,
         contentScale = ContentScale.Fit,
         modifier = modifier.widthIn(max = 64.dp),

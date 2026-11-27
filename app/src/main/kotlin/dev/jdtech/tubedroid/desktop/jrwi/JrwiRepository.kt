@@ -11,6 +11,8 @@ import dev.jdtech.jellyfin.jrwi.JrwiProgress
 import dev.jdtech.jellyfin.jrwi.JrwiShow
 import dev.jdtech.jellyfin.jrwi.JrwiTranscript
 import dev.jdtech.jellyfin.tubearchivist.TaApi
+import dev.jdtech.tubedroid.desktop.HeldSave
+import dev.jdtech.tubedroid.desktop.KeptPages
 import dev.jdtech.tubedroid.desktop.jellyfin.JellyfinClient
 import dev.jdtech.tubedroid.desktop.player.PlayerRequest
 import java.io.IOException
@@ -55,6 +57,19 @@ class JrwiRepository(
     /** The archive's numbers as its stats page last worked them out. */
     val statsCache = JrwiStatsCache()
 
+    /**
+     * What's kept on this PC with the downloads, which stands in while the archive can't be
+     * reached. Set once the app is put together.
+     */
+    var kept: KeptPages? = null
+
+    /**
+     * An item by any of its posts, or as it's kept on this PC when the archive can't be reached,
+     * with [onKept] told so.
+     */
+    suspend fun item(postId: Long, onKept: () -> Unit = {}): JrwiItem =
+        kept?.item(postId, onKept) ?: api.getItem(postId)
+
     // Shows
 
     /** The archive's shows, as last read. Pages show names from here without asking again. */
@@ -74,14 +89,17 @@ class JrwiRepository(
         shows
     }
 
-    /** A show's name, or its ID when the shows can't be read. */
+    /**
+     * A show's name. When the shows can't be read, it's the name a download of the show has, or
+     * else the show's ID.
+     */
     suspend fun showName(showId: String): String =
         try {
             loadShows().firstOrNull { it.id == showId }?.name ?: showId
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            showId
+            kept?.showName(showId) ?: showId
         }
 
     // Progress, as last saved from this app, so lists show it without loading again
@@ -121,8 +139,9 @@ class JrwiRepository(
     suspend fun progress(item: JrwiItem, audio: Boolean): JrwiProgress? {
         val postId = (if (audio) item.audio?.postId else item.video?.postId) ?: return null
         return try {
-            // A save that's still waiting goes first, so it isn't read over
-            sendWaiting()
+            // A save that's still waiting goes first, so it isn't read over. When that can't be
+            // sent, the archive can't be asked either
+            if (!sendWaiting()) return null
             api.getProgress(postId)
         } catch (e: CancellationException) {
             throw e
@@ -131,22 +150,62 @@ class JrwiRepository(
         }
     }
 
-    // Saves the archive couldn't be reached for, the newest per episode, sent with their time
+    /**
+     * How far the episode was played as far as this PC knows, in the timeline of its video or, with
+     * [audio], its audio: what waits to be saved, what was saved from here last, or what the
+     * archive gave with the item. For starting it while the archive can't be reached.
+     */
+    fun lastKnown(item: JrwiItem, audio: Boolean): JrwiProgress? {
+        val postId = (if (audio) item.audio?.postId else item.video?.postId) ?: return null
+        val known = progressOf(item) ?: return null
+        val position =
+            when {
+                known.postId == null || known.postId == postId -> known.position
+                audio -> item.audioSeconds(known.position)
+                else -> item.videoSeconds(known.position)
+            }
+        val duration = known.duration.takeIf { known.postId == null || known.postId == postId }
+        return known.copy(postId = postId, position = position, duration = duration)
+    }
 
-    private class Waiting(
-        val postId: Long,
-        val position: Double,
-        val duration: Double?,
-        val finished: Boolean?,
-        val madeAt: String,
-    )
+    /** [progress], or what this PC knows when the archive can't be reached. */
+    suspend fun progressOrKnown(item: JrwiItem, audio: Boolean): JrwiProgress? =
+        progress(item, audio) ?: lastKnown(item, audio)
 
-    private val waiting = ConcurrentHashMap<Long, Waiting>()
+    // Saves the archive couldn't be reached for, the newest per episode, sent with their time.
+    // They're kept on this PC too, so that they outlast the app being closed
 
-    private suspend fun sendWaiting() {
+    private val waiting = ConcurrentHashMap<Long, HeldSave>()
+
+    private fun hold(itemId: Long, save: HeldSave) {
+        waiting[itemId] = save
+        kept?.holdSave(itemId, save)
+        // Shown as played to here meanwhile
+        saved[itemId] =
+            JrwiProgress(save.postId, save.position, save.duration, save.finished == true, null)
+    }
+
+    /**
+     * The saves that waited when the app was last closed: shown, and sent if the archive's back.
+     */
+    suspend fun takeHeld(saves: Map<Long, HeldSave>) {
+        for ((itemId, save) in saves) {
+            if (waiting.putIfAbsent(itemId, save) != null) continue
+            saved[itemId] =
+                JrwiProgress(save.postId, save.position, save.duration, save.finished == true, null)
+        }
+        try {
+            sendWaiting()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {}
+    }
+
+    /** Returns false when the archive couldn't be reached. */
+    private suspend fun sendWaiting(): Boolean {
         for ((itemId, save) in waiting.entries.toList()) {
             try {
-                val kept =
+                val taken =
                     putProgress(
                         save.postId,
                         save.position,
@@ -154,17 +213,19 @@ class JrwiRepository(
                         save.finished,
                         save.madeAt,
                     )
-                waiting.remove(itemId, save)
-                saved[itemId] = kept
+                if (waiting.remove(itemId, save)) kept?.saveSent(itemId)
+                saved[itemId] = taken
+                kept?.noteProgress(itemId, taken)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: JrwiApiException) {
                 // The archive won't take it, which another try won't change
-                waiting.remove(itemId, save)
+                if (waiting.remove(itemId, save)) kept?.saveSent(itemId)
             } catch (_: IOException) {
-                return
+                return false
             }
         }
+        return true
     }
 
     /**
@@ -218,13 +279,30 @@ class JrwiRepository(
             .onFailure { if (it is CancellationException) throw it }
     }
 
-    /** Marks both the video and the audio watched, or both not watched. */
+    /**
+     * Marks both the video and the audio watched, or both not watched. While the archive can't be
+     * reached, that waits on this PC as a place does, and the video's own copy isn't told.
+     */
     suspend fun setWatched(item: JrwiItem, watched: Boolean) {
         // The archive's one record covers both versions, so either post will do
         val postId = item.video?.postId ?: item.audio?.postId ?: return
         val duration = if (item.video != null) item.video?.duration else item.audio?.duration
-        val kept = putProgress(postId, 0.0, duration, watched, null)
-        saved[item.itemId ?: item.id] = kept
+        val itemId = item.itemId ?: item.id
+        val taken =
+            try {
+                putProgress(postId, 0.0, duration, watched, null)
+            } catch (e: JrwiApiException) {
+                throw e
+            } catch (_: IOException) {
+                hold(
+                    itemId,
+                    HeldSave(postId, 0.0, duration, watched, OffsetDateTime.now().toString()),
+                )
+                return
+            }
+        if (waiting.remove(itemId) != null) kept?.saveSent(itemId)
+        saved[itemId] = taken
+        kept?.noteProgress(itemId, taken)
         val video = item.video ?: return
         if (video.isYoutube) {
             val youtubeId = video.youtubeId ?: return
@@ -278,20 +356,23 @@ class JrwiRepository(
             }
         return try {
             sendWaiting()
-            waiting.remove(itemId)
-            putProgress(postId, position, duration, finished, null).also { saved[itemId] = it }
+            putProgress(postId, position, duration, finished, null).also {
+                // Newer than a save of the same episode that still waited
+                if (waiting.remove(itemId) != null) kept?.saveSent(itemId)
+                saved[itemId] = it
+                kept?.noteProgress(itemId, it)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: JrwiApiException) {
             System.err.println("The archiver refused progress of $postId: ${e.message}")
             null
         } catch (_: IOException) {
-            waiting[itemId] =
-                Waiting(postId, position, duration, finished, OffsetDateTime.now().toString())
-            // Shown as played to here meanwhile
-            JrwiProgress(postId, position, duration, finished == true, null).also {
-                saved[itemId] = it
-            }
+            hold(
+                itemId,
+                HeldSave(postId, position, duration, finished, OffsetDateTime.now().toString()),
+            )
+            saved[itemId]
         }
     }
 
@@ -452,8 +533,10 @@ class JrwiRepository(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
-            null
+        } catch (e: Exception) {
+            // Without the archive, a video on this PC is still the episode it was downloaded as
+            val episode = kept?.takeIf { it.unreachable(e) }?.episodeOfVideo(youtubeId)
+            episode?.let { JrwiMatch(it, it.transcriptPost(audio = false)) }
         }
     }
 
@@ -473,12 +556,28 @@ class JrwiRepository(
             return PlayerRequest.Ta(youtubeId, fromStart = fromStart, startSeconds = startSeconds)
         }
         val episodeId = episodeId(item)
-        return if (episodeId != null) {
+        return if (
+            episodeId != null && !(kept?.hasVideoOf(item) == true && jellyfinIsAway(episodeId))
+        ) {
             PlayerRequest.Jellyfin(episodeId.toString(), fromStart, startSeconds)
         } else {
             PlayerRequest.Jrwi(item.id, audio = false, fromStart, startSeconds)
         }
     }
+
+    /**
+     * Whether Jellyfin can't be asked about [episodeId] now. Asked only for a video that's on this
+     * PC, which then plays without Jellyfin, with its place kept in the archive.
+     */
+    private suspend fun jellyfinIsAway(episodeId: UUID): Boolean =
+        try {
+            jellyfin.item(episodeId)
+            false
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            true
+        }
 
     /**
      * The item after [item] as its show's page lists it: in its own tab, oldest first, so in
@@ -504,6 +603,20 @@ class JrwiRepository(
         return null
     }
 
+    /**
+     * The episode the audio goes on to after [item]: the next in its show, or, while the archive
+     * can't be reached, the next of those that are on this PC with their audio.
+     */
+    suspend fun nextToHear(item: JrwiItem): JrwiItem? =
+        try {
+            nextInShow(item)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            val pages = kept?.takeIf { it.unreachable(e) } ?: throw e
+            pages.nextKept(item)
+        }
+
     // Transcripts: the last two read, for a while, so one that gets timed meanwhile is read again
 
     private class KeptTranscript(val transcript: JrwiTranscript, val at: Long)
@@ -516,7 +629,7 @@ class JrwiRepository(
         synchronized(transcripts) {
             transcripts[postId]?.let { if (now - it.at < TRANSCRIPT_KEPT_MS) return it.transcript }
         }
-        val read = api.getTranscript(postId)
+        val read = kept?.transcript(postId) ?: api.getTranscript(postId)
         synchronized(transcripts) {
             transcripts.remove(postId)
             transcripts[postId] = KeptTranscript(read, now)
