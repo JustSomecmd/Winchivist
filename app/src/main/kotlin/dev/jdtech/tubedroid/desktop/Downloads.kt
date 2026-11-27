@@ -248,10 +248,21 @@ class Downloads(
         record.values.filter { it.whole && it.listedBy(service) }
 
     /**
-     * What's asked for and not whole yet of what [service]'s list has, in the order it's fetched.
+     * What's asked for and not whole yet of what [service]'s list has: what's downloading first,
+     * then what waits, in the order it's fetched, then what's paused and what failed.
      */
     fun unfinished(service: String): List<LocalDownload> =
-        items.filter { it.unfinished && it.kept?.listedBy(service) == true }.reversed()
+        items
+            .filter { it.unfinished && it.kept?.listedBy(service) == true }
+            .reversed()
+            .sortedBy {
+                when (it.state) {
+                    LocalDownload.State.RUNNING -> 0
+                    LocalDownload.State.QUEUED -> 1
+                    LocalDownload.State.PAUSED -> 2
+                    else -> 3
+                }
+            }
 
     /**
      * The file on this PC for [id], when the record has it as whole and it's still there, for

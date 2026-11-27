@@ -98,7 +98,7 @@ fun OverlayLabel(text: String, modifier: Modifier = Modifier) {
 
 /**
  * A video's thumbnail with its length, watched tick and how far it was watched, and a mark at the
- * top left when it's on this PC.
+ * bottom left when it's on this PC.
  */
 @Composable
 fun VideoThumbnail(video: TaVideo, modifier: Modifier = Modifier) {
@@ -134,7 +134,8 @@ fun BoxScope.VideoThumbnailContent(video: TaVideo) {
         Surface(
             shape = CircleShape,
             color = Color.Black.copy(alpha = 0.7f),
-            modifier = Modifier.align(Alignment.TopStart).padding(Spacings.small),
+            // At the bottom left: the top corners are the playlist's count and the watched tick
+            modifier = Modifier.align(Alignment.BottomStart).padding(Spacings.small),
         ) {
             AppIcon(
                 name = "ic_download",
