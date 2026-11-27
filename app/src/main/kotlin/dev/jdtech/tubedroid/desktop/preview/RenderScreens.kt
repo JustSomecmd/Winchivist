@@ -134,6 +134,8 @@ fun main(args: Array<String>) {
     }
 
     runBlocking(Dispatchers.Main) {
+        // The downloader, tried for real before anything is drawn
+        checkDownloads()
         val shell = Shell(graph.audio)
         val scene =
             ImageComposeScene(width = 1360, height = 860, density = Density(1f)) {
