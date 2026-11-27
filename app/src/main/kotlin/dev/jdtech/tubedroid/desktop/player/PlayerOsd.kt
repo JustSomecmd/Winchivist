@@ -1127,6 +1127,10 @@ internal fun SeekBar(
                 .height(28.dp)
                 .hoverable(hover)
                 .pointerHoverIcon(PointerIcon.Hand)
+                // Coming onto the bar counts too, as a mouse can stop right there
+                .onPointerEvent(PointerEventType.Enter) { event ->
+                    hoverX = event.changes.firstOrNull()?.position?.x
+                }
                 .onPointerEvent(PointerEventType.Move) { event ->
                     hoverX = event.changes.firstOrNull()?.position?.x
                 }

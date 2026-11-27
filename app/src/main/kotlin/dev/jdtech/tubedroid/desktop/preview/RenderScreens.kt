@@ -442,7 +442,8 @@ fun main(args: Array<String>) {
         // In their first second
         osdShot(osdScene, "player-osd", turns = 5)
         // The mouse over the seek bar, in the second chapter: its time and the chapter's name
-        osdShot(osdScene, "player-osd-chapter", turns = 2, mouse = Offset(700f, 782f))
+        osdScene.sendPointerEvent(PointerEventType.Move, Offset(690f, 782f))
+        osdShot(osdScene, "player-osd-chapter", turns = 3, mouse = Offset(700f, 782f))
         // Four seconds on, with the mouse lying still on the bottom bar: faded, though it's paused
         val restingAt = Offset(300f, 824f)
         osdShot(osdScene, "player-osd-idle", turns = 20, mouse = restingAt)
